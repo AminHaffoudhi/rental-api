@@ -1,0 +1,26 @@
+import { Router } from "express";
+import authRoutes from "@/routes/auth.routes";
+import bookingRoutes from "@/routes/booking.routes";
+import deliveryRoutes from "@/routes/delivery.routes";
+import equipmentRoutes from "@/routes/equipment.routes";
+import kycRoutes from "@/routes/kyc.routes";
+import notificationsRoutes from "@/routes/notifications.routes";
+import paymentRoutes from "@/routes/payment.routes";
+import reviewRoutes from "@/routes/review.routes";
+import uploadRoutes from "@/routes/upload.routes";
+import userRoutes from "@/routes/user.routes";
+
+const router = Router();
+
+router.use("/auth", authRoutes);
+router.use("/kyc", kycRoutes);
+router.use("/users", userRoutes);
+router.use("/equipment", equipmentRoutes);
+router.use("/bookings", bookingRoutes);
+router.use("/delivery", deliveryRoutes);
+router.use("/payments", paymentRoutes);
+router.use("/reviews", reviewRoutes);
+router.use("/upload", uploadRoutes);
+router.use("/notifications", notificationsRoutes);
+
+export default router;

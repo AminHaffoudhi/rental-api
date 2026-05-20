@@ -1,0 +1,24 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const auth_routes_1 = __importDefault(require("@/routes/auth.routes"));
+const booking_routes_1 = __importDefault(require("@/routes/booking.routes"));
+const delivery_routes_1 = __importDefault(require("@/routes/delivery.routes"));
+const equipment_routes_1 = __importDefault(require("@/routes/equipment.routes"));
+const payment_routes_1 = __importDefault(require("@/routes/payment.routes"));
+const review_routes_1 = __importDefault(require("@/routes/review.routes"));
+const upload_routes_1 = __importDefault(require("@/routes/upload.routes"));
+const user_routes_1 = __importDefault(require("@/routes/user.routes"));
+const router = (0, express_1.Router)();
+router.use("/auth", auth_routes_1.default);
+router.use("/users", user_routes_1.default);
+router.use("/equipment", equipment_routes_1.default);
+router.use("/bookings", booking_routes_1.default);
+router.use("/delivery", delivery_routes_1.default);
+router.use("/payments", payment_routes_1.default);
+router.use("/reviews", review_routes_1.default);
+router.use("/upload", upload_routes_1.default);
+exports.default = router;

@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  RENTER
+  OWNER
+  BOTH
+  ADMIN
+}
+
+enum KycStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum CodeType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum Category {
+  CONSTRUCTION
+  SPORTS
+  EVENTS
+  TOOLS
+  OTHER
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  PAYMENT_PENDING
+  PAID
+  PICKUP_SCHEDULED
+  IN_TRANSIT
+  ACTIVE
+  RETURN_SCHEDULED
+  RETURNING
+  INSPECTING
+  COMPLETED
+  DISPUTED
+  REFUNDED
+}
+
+enum DeliveryStatus {
+  SCHEDULED
+  PICKED_UP
+  DELIVERED
+  RETURN_SCHEDULED
+  RETURN_PICKED_UP
+  RETURNED
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  PAYOUT_PENDING
+  PAYOUT_SENT
+}
+
+enum DisputeStatus {
+  OPEN
+  RESOLVED_OWNER
+  RESOLVED_RENTER
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  password      String?
+  image         String?
+  role          Role      @default(RENTER)
+  kycStatus     KycStatus @default(PENDING)
+  phone         String?
+  emailVerified Boolean   @default(false)
+  canList       Boolean   @default(false)
+  /// OneSignal subscription / player id for web push targeting (optional).
+  oneSignalPlayerId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  equipment          Equipment[]
+  bookingsAsRenter   Booking[]          @relation("RenterBookings")
+  bookingsAsOwner    Booking[]          @relation("OwnerBookings")
+  reviewsGiven       Review[]           @relation("ReviewerReviews")
+  reviewsReceived    Review[]           @relation("RevieweeReviews")
+  disputesRaised     Dispute[]
+  verificationCodes  VerificationCode[]
+  kycDocument        KycDocument?
+}
+
+model VerificationCode {
+  id        String    @id @default(cuid())
+  userId    String
+  code      String
+  type      CodeType
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([code, type])
+}
+
+model KycDocument {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  documentUrl  String
+  documentType String?
+  status       KycStatus @default(PENDING)
+  adminNote    String?
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  submittedAt  DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Equipment {
+  id            String   @id @default(cuid())
+  title         String
+  description   String
+  category      Category
+  images        String[]
+  imageKeys     String[] @default([])
+  dailyRate     Float
+  weeklyRate    Float?
+  depositAmount Float
+  deliveryFee   Float
+  ownerId       String
+  isAvailable   Boolean  @default(true)
+  location      String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  owner    User      @relation(fields: [ownerId], references: [id])
+  bookings Booking[]
+  reviews  Review[]
+}
+
+model Booking {
+  id            String        @id @default(cuid())
+  renterId      String
+  ownerId       String
+  equipmentId   String
+  status        BookingStatus @default(PENDING)
+  startDate     DateTime
+  endDate       DateTime
+  totalPrice    Float
+  depositAmount Float
+  deliveryFee   Float
+  platformFee   Float
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  renter    User       @relation("RenterBookings", fields: [renterId], references: [id])
+  owner     User       @relation("OwnerBookings", fields: [ownerId], references: [id])
+  equipment Equipment  @relation(fields: [equipmentId], references: [id])
+  delivery  Delivery?
+  payment   Payment?
+  reviews   Review[]
+  dispute   Dispute?
+
+  @@index([equipmentId])
+  @@index([renterId])
+  @@index([ownerId])
+}
+
+model Delivery {
+  id           String         @id @default(cuid())
+  bookingId    String         @unique
+  agentName    String?
+  agentPhone   String?
+  pickupPhotos String[]
+  returnPhotos String[]
+  status       DeliveryStatus @default(SCHEDULED)
+  deliverySlot DateTime?
+  returnSlot   DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  bookingId     String        @unique
+  amount        Float
+  depositAmount Float
+  status        PaymentStatus @default(PENDING)
+  confirmedAt   DateTime?
+  payoutSentAt  DateTime?
+  confirmedBy   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+}
+
+model Review {
+  id          String   @id @default(cuid())
+  bookingId   String
+  reviewerId  String
+  revieweeId  String
+  equipmentId String
+  rating      Int
+  comment     String?
+  createdAt   DateTime @default(now())
+
+  booking   Booking   @relation(fields: [bookingId], references: [id])
+  reviewer  User      @relation("ReviewerReviews", fields: [reviewerId], references: [id])
+  reviewee  User      @relation("RevieweeReviews", fields: [revieweeId], references: [id])
+  equipment Equipment @relation(fields: [equipmentId], references: [id])
+
+  @@unique([bookingId, reviewerId])
+}
+
+model Dispute {
+  id         String        @id @default(cuid())
+  bookingId  String        @unique
+  raisedById String
+  reason     String
+  evidence   String[]
+  status     DisputeStatus @default(OPEN)
+  resolution String?
+  resolvedAt DateTime?
+  createdAt  DateTime      @default(now())
+
+  booking  Booking @relation(fields: [bookingId], references: [id])
+  raisedBy User    @relation(fields: [raisedById], references: [id])
+}
