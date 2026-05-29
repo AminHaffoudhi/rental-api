@@ -84,7 +84,11 @@ export async function createBooking(
   data: { equipmentId: string; startDate: Date; endDate: Date; notes?: string }
 ) {
   const equipment = await prisma.equipment.findUnique({ where: { id: data.equipmentId } });
-  if (!equipment || !equipment.isAvailable) {
+  if (
+    !equipment ||
+    !equipment.isAvailable ||
+    equipment.approvalStatus !== "APPROVED"
+  ) {
     throw new NotFoundError("Equipment");
   }
   if (equipment.ownerId === renterId) {
@@ -353,20 +357,143 @@ export async function cancelBooking(bookingId: string, renterId: string): Promis
   });
 }
 
+const bookingDetailInclude = {
+  equipment: true,
+  owner: true,
+  renter: true,
+  delivery: true,
+  payment: true,
+} as const;
+
+const ownerHandoverStatuses: BookingStatus[] = [
+  BookingStatus.PAID,
+  BookingStatus.PICKUP_SCHEDULED,
+  BookingStatus.IN_TRANSIT,
+];
+
+const ownerReturnCompleteStatuses: BookingStatus[] = [
+  BookingStatus.RETURN_SCHEDULED,
+  BookingStatus.RETURNING,
+  BookingStatus.INSPECTING,
+];
+
+/** Owner marks equipment handed to renter (skips agent steps for self-coordinated delivery). */
+export async function ownerHandoverToRenter(bookingId: string, ownerId: string): Promise<Booking> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { delivery: true },
+  });
+  if (!booking || booking.ownerId !== ownerId) {
+    throw new NotFoundError("Booking");
+  }
+  if (!ownerHandoverStatuses.includes(booking.status)) {
+    throw new BusinessError("This booking cannot be marked as handed over yet");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (booking.delivery) {
+      await tx.delivery.update({
+        where: { bookingId },
+        data: { status: DeliveryStatus.DELIVERED },
+      });
+    }
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.ACTIVE },
+      include: bookingDetailInclude,
+    });
+  });
+}
+
+/** Owner confirms return in good condition and closes the rental. */
+export async function ownerConfirmReturnComplete(
+  bookingId: string,
+  ownerId: string
+): Promise<Booking> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { delivery: true, payment: true },
+  });
+  if (!booking || booking.ownerId !== ownerId) {
+    throw new NotFoundError("Booking");
+  }
+  if (!ownerReturnCompleteStatuses.includes(booking.status)) {
+    throw new BusinessError("This booking cannot be completed from its current state");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (booking.delivery) {
+      await tx.delivery.update({
+        where: { bookingId },
+        data: { status: DeliveryStatus.RETURNED },
+      });
+    }
+    if (booking.payment?.status === PaymentStatus.CONFIRMED) {
+      await tx.payment.update({
+        where: { bookingId },
+        data: { status: PaymentStatus.PAYOUT_PENDING },
+      });
+    }
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.COMPLETED },
+      include: bookingDetailInclude,
+    });
+  });
+}
+
 export async function confirmDelivery(bookingId: string, renterId: string): Promise<Booking> {
-  const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { delivery: true },
+  });
   if (!booking || booking.renterId !== renterId) {
     throw new NotFoundError("Booking");
   }
-  return transitionBooking(bookingId, BookingStatus.ACTIVE, renterId);
+  if (!canTransition(booking.status, BookingStatus.ACTIVE)) {
+    throw new InvalidTransitionError(booking.status, BookingStatus.ACTIVE);
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (booking.delivery) {
+      await tx.delivery.update({
+        where: { bookingId },
+        data: { status: DeliveryStatus.DELIVERED },
+      });
+    }
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.ACTIVE },
+      include: bookingDetailInclude,
+    });
+  });
 }
 
 export async function requestReturn(bookingId: string, renterId: string): Promise<Booking> {
-  const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { delivery: true },
+  });
   if (!booking || booking.renterId !== renterId) {
     throw new NotFoundError("Booking");
   }
-  return transitionBooking(bookingId, BookingStatus.RETURN_SCHEDULED, renterId);
+  if (!canTransition(booking.status, BookingStatus.RETURN_SCHEDULED)) {
+    throw new InvalidTransitionError(booking.status, BookingStatus.RETURN_SCHEDULED);
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (booking.delivery) {
+      await tx.delivery.update({
+        where: { bookingId },
+        data: { status: DeliveryStatus.RETURN_SCHEDULED },
+      });
+    }
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.RETURN_SCHEDULED },
+      include: bookingDetailInclude,
+    });
+  });
 }
 
 export async function raiseDispute(

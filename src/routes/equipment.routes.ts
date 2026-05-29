@@ -12,6 +12,12 @@ import {
 const router = Router();
 
 router.get("/", asyncHandler(equipmentController.search));
+router.get(
+  "/mine",
+  authMiddleware,
+  requireCanList,
+  asyncHandler(equipmentController.listMine)
+);
 router.post(
   "/",
   authMiddleware,

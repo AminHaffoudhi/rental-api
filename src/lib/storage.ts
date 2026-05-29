@@ -194,7 +194,7 @@ export async function initStorage(): Promise<void> {
   }
 }
 
-export type UploadFolder = "equipment" | "avatars" | "kyc" | "delivery";
+export type UploadFolder = "equipment" | "avatars" | "covers" | "kyc" | "delivery" | "categories";
 
 export function generateFileKey(folder: UploadFolder, userId: string, originalName: string): string {
   const ext = path.extname(originalName).replace(/^\./, "").toLowerCase() || "jpg";

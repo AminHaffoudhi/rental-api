@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authRoutes from "@/routes/auth.routes";
 import bookingRoutes from "@/routes/booking.routes";
+import categoryRoutes from "@/routes/category.routes";
 import deliveryRoutes from "@/routes/delivery.routes";
 import equipmentRoutes from "@/routes/equipment.routes";
 import kycRoutes from "@/routes/kyc.routes";
@@ -13,6 +14,7 @@ import userRoutes from "@/routes/user.routes";
 const router = Router();
 
 router.use("/auth", authRoutes);
+router.use("/categories", categoryRoutes);
 router.use("/kyc", kycRoutes);
 router.use("/users", userRoutes);
 router.use("/equipment", equipmentRoutes);

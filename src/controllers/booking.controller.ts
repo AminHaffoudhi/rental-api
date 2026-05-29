@@ -64,6 +64,28 @@ export async function confirmDelivery(req: Request, res: Response): Promise<void
   success(res, booking);
 }
 
+export async function ownerHandover(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const booking = await bookingService.ownerHandoverToRenter(
+    pathParam(req.params.id),
+    req.user.id
+  );
+  success(res, booking);
+}
+
+export async function ownerCompleteReturn(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const booking = await bookingService.ownerConfirmReturnComplete(
+    pathParam(req.params.id),
+    req.user.id
+  );
+  success(res, booking);
+}
+
 export async function requestReturn(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     throw new UnauthorizedError();

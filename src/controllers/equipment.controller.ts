@@ -1,4 +1,3 @@
-import { Category } from "@prisma/client";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { UnauthorizedError } from "@/lib/errors";
@@ -8,7 +7,8 @@ import { pathParam } from "@/utils/pathParam";
 
 const searchQuerySchema = z.object({
   q: z.string().optional(),
-  category: z.nativeEnum(Category).optional(),
+  categoryId: z.string().optional(),
+  category: z.string().optional(),
   minPrice: z.coerce.number().optional(),
   maxPrice: z.coerce.number().optional(),
   location: z.string().optional(),
@@ -24,9 +24,11 @@ export async function search(req: Request, res: Response): Promise<void> {
   if (!parsed.success) {
     throw parsed.error;
   }
-  const { availableOnly, ...rest } = parsed.data;
+  const { availableOnly, categoryId, category, ...rest } = parsed.data;
   const items = await equipmentService.searchEquipment({
     ...rest,
+    categoryId,
+    category,
     ...(availableOnly !== undefined
       ? { availableOnly: availableOnly === "true" }
       : {}),
@@ -42,8 +44,19 @@ export async function create(req: Request, res: Response): Promise<void> {
   success(res, item, 201);
 }
 
+export async function listMine(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const items = await equipmentService.listOwnerEquipment(req.user.id);
+  success(res, { items, total: items.length });
+}
+
 export async function getById(req: Request, res: Response): Promise<void> {
-  const item = await equipmentService.getEquipmentById(pathParam(req.params.id));
+  const item = await equipmentService.getEquipmentById(
+    pathParam(req.params.id),
+    req.user?.id
+  );
   success(res, item);
 }
 
@@ -65,6 +78,10 @@ export async function remove(req: Request, res: Response): Promise<void> {
 
 export async function availability(req: Request, res: Response): Promise<void> {
   const month = typeof req.query.month === "string" ? req.query.month : "";
-  const data = await equipmentService.getAvailability(pathParam(req.params.id), month);
+  const data = await equipmentService.getAvailability(
+    pathParam(req.params.id),
+    month,
+    req.user?.id
+  );
   success(res, data);
 }

@@ -153,3 +153,97 @@ export async function notifyPayoutSent(ownerId: string, amount: number, equipmen
     data: { type: "payout_sent", amount },
   });
 }
+
+export async function notifyEquipmentPendingReview(
+  equipmentId: string,
+  title: string,
+  ownerName: string
+): Promise<void> {
+  await sendToAdmins({
+    title: "New listing pending approval",
+    message: `${ownerName} submitted "${title}" for review`,
+    url: `${ADMIN_URL}/equipment?highlight=${equipmentId}`,
+    data: { type: "equipment_pending", equipmentId },
+  });
+}
+
+export async function notifyEquipmentApproved(ownerId: string, title: string, equipmentId: string): Promise<void> {
+  await sendToUser(ownerId, {
+    title: "Listing approved",
+    message: `"${title}" is now live. Turn on visibility when you're ready for renters to find it.`,
+    url: `${BASE_URL}/dashboard/listings?highlight=${equipmentId}`,
+    data: { type: "equipment_approved", equipmentId },
+  });
+}
+
+export async function notifyAdminsNewReview(
+  reviewId: string,
+  type: string,
+  reviewerName: string,
+  targetLabel: string
+): Promise<void> {
+  await sendToAdmins({
+    title: "New review pending moderation",
+    message: `${reviewerName} submitted a ${type === "EQUIPMENT" ? "listing" : "owner"} review for "${targetLabel}"`,
+    url: `${ADMIN_URL}/reviews?highlight=${reviewId}`,
+    data: { type: "review_pending", reviewId },
+  });
+}
+
+export async function notifyOwnerReviewReceived(ownerId: string, reviewerName: string): Promise<void> {
+  await sendToUser(ownerId, {
+    title: "New review on your profile",
+    message: `${reviewerName} left you a review. It will appear after admin approval.`,
+    url: `${BASE_URL}/users/${ownerId}`,
+    data: { type: "review_owner_received" },
+  });
+}
+
+export async function notifyOwnerEquipmentReviewed(
+  ownerId: string,
+  reviewerName: string,
+  equipmentTitle: string,
+  equipmentId: string
+): Promise<void> {
+  await sendToUser(ownerId, {
+    title: "New review on your listing",
+    message: `${reviewerName} reviewed "${equipmentTitle}". Pending admin approval.`,
+    url: `${BASE_URL}/dashboard/listings?highlight=${equipmentId}`,
+    data: { type: "review_equipment_received", equipmentId },
+  });
+}
+
+export async function notifyReviewApproved(
+  ownerId: string,
+  type: string,
+  reviewerName: string,
+  targetLabel: string,
+  options?: { equipmentId?: string | null; reviewId?: string }
+): Promise<void> {
+  const highlight = options?.reviewId ? `?highlight=${options.reviewId}` : "";
+  const url =
+    type === "EQUIPMENT" && options?.equipmentId
+      ? `${BASE_URL}/equipment/${options.equipmentId}${highlight}`
+      : `${BASE_URL}/users/${ownerId}${highlight}`;
+
+  await sendToUser(ownerId, {
+    title: type === "EQUIPMENT" ? "Listing review published" : "Profile review published",
+    message: `A review from ${reviewerName} about "${targetLabel}" is now visible.`,
+    url,
+    data: { type: "review_approved" },
+  });
+}
+
+export async function notifyEquipmentRejected(
+  ownerId: string,
+  title: string,
+  note: string,
+  equipmentId: string
+): Promise<void> {
+  await sendToUser(ownerId, {
+    title: "Listing needs changes",
+    message: `"${title}" was not approved: ${note.slice(0, 120)}. Edit and resubmit from My Listings.`,
+    url: `${BASE_URL}/dashboard/listings?highlight=${equipmentId}`,
+    data: { type: "equipment_rejected", note, equipmentId },
+  });
+}

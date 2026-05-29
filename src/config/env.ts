@@ -90,3 +90,13 @@ export const S3_PUBLIC_BASE_URL = STORAGE_PUBLIC_BASE_URL;
 /** Local Redis (ioredis). Defaults: 127.0.0.1:6379 */
 export const REDIS_HOST = process.env.REDIS_HOST?.trim() || "127.0.0.1";
 export const REDIS_PORT = process.env.REDIS_PORT?.trim() || "6379";
+
+/** Stripe secret key — unset disables online checkout (manual admin confirm only). */
+export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY?.trim() || "";
+export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET?.trim() || "";
+/** ISO currency for Checkout (Stripe does not support TND; use eur or usd in test). */
+export const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY?.trim() || "eur").toLowerCase();
+
+export function isStripeConfigured(): boolean {
+  return STRIPE_SECRET_KEY.length > 0;
+}

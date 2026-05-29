@@ -1,11 +1,22 @@
-import { BookingStatus, Category, Prisma } from "@prisma/client";
-import { NotFoundError, ValidationError } from "@/lib/errors";
+import { BookingStatus, EquipmentApprovalStatus, Prisma, ReviewStatus, ReviewType } from "@prisma/client";
+import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 import {
   deleteFile,
   PUBLIC_BUCKET,
   tryExtractKeyFromPublicUrl,
 } from "@/lib/storage";
+import {
+  notifyEquipmentApproved,
+  notifyEquipmentPendingReview,
+  notifyEquipmentRejected,
+} from "@/services/notification.service";
+import { assertCategoryId, categoryPublicSelect, resolveCategoryId } from "@/services/category.service";
+import {
+  approvedEquipmentReviewWhere,
+  attachEquipmentReviewSummaries,
+  attachEquipmentReviewSummary,
+} from "@/utils/reviewStats";
 
 function alignImageKeys(images: string[], imageKeys: string[]): string[] {
   return images.map((url, i) => {
@@ -17,18 +28,68 @@ function alignImageKeys(images: string[], imageKeys: string[]): string[] {
 
 export type EquipmentSearchFilters = {
   q?: string;
-  category?: Category;
+  categoryId?: string;
+  category?: string;
   minPrice?: number;
   maxPrice?: number;
   location?: string;
   limit?: number;
   page?: number;
   pageSize?: number;
-  /** recent | price_asc | price_desc | rating */
   sort?: string;
-  /** When false, include unavailable listings. Default true. */
   availableOnly?: boolean;
 };
+
+const equipmentInclude = {
+  category: { select: categoryPublicSelect },
+  owner: {
+    select: { id: true, name: true, image: true, role: true, kycStatus: true },
+  },
+  reviews: {
+    where: approvedEquipmentReviewWhere,
+    select: { id: true, rating: true },
+  },
+} as const;
+
+function equipmentDetailReviewsWhere(
+  viewerUserId: string | undefined,
+  isOwner: boolean
+): Prisma.ReviewWhereInput {
+  if (isOwner) {
+    return { type: ReviewType.EQUIPMENT };
+  }
+  if (!viewerUserId) {
+    return approvedEquipmentReviewWhere;
+  }
+  return {
+    type: ReviewType.EQUIPMENT,
+    OR: [approvedEquipmentReviewWhere, { reviewerId: viewerUserId }],
+  };
+}
+
+function equipmentDetailInclude(viewerUserId: string | undefined, ownerId: string) {
+  const isOwner = Boolean(viewerUserId && viewerUserId === ownerId);
+  return {
+    category: { select: categoryPublicSelect },
+    owner: {
+      select: {
+        id: true,
+        name: true,
+        image: true,
+        role: true,
+        kycStatus: true,
+        createdAt: true,
+      },
+    },
+    reviews: {
+      where: equipmentDetailReviewsWhere(viewerUserId, isOwner),
+      include: {
+        reviewer: { select: { id: true, name: true, image: true } },
+      },
+      orderBy: { createdAt: "desc" as const },
+    },
+  };
+}
 
 function collectStorageKeys(row: { images: string[]; imageKeys: string[] }): Set<string> {
   const keys = new Set<string>();
@@ -53,12 +114,23 @@ async function deleteRemovedPublicKeys(
   );
 }
 
+function assertCanViewEquipment(
+  row: { ownerId: string; approvalStatus: EquipmentApprovalStatus },
+  viewerUserId?: string
+): void {
+  if (row.approvalStatus === EquipmentApprovalStatus.APPROVED) return;
+  if (viewerUserId && row.ownerId === viewerUserId) return;
+  throw new NotFoundError("Equipment");
+}
+
 export async function searchEquipment(filters: EquipmentSearchFilters) {
   const availableOnly = filters.availableOnly !== false;
+  const resolvedCategoryId = await resolveCategoryId(filters.categoryId, filters.category);
 
   const where: Prisma.EquipmentWhereInput = {
+    approvalStatus: EquipmentApprovalStatus.APPROVED,
     ...(availableOnly ? { isAvailable: true } : {}),
-    ...(filters.category ? { category: filters.category } : {}),
+    ...(resolvedCategoryId ? { categoryId: resolvedCategoryId } : {}),
     ...(filters.location
       ? { location: { contains: filters.location, mode: "insensitive" } }
       : {}),
@@ -99,59 +171,63 @@ export async function searchEquipment(filters: EquipmentSearchFilters) {
       orderBy = { dailyRate: "desc" };
       break;
     case "rating":
-      orderBy = { reviews: { _count: "desc" } };
+      orderBy = { createdAt: "desc" };
       break;
     case "recent":
     default:
       orderBy = { createdAt: "desc" };
   }
 
-  const [total, items] = await prisma.$transaction([
+  const [total, rows] = await prisma.$transaction([
     prisma.equipment.count({ where }),
     prisma.equipment.findMany({
       where,
-      include: {
-        owner: {
-          select: { id: true, name: true, image: true, role: true },
-        },
-        reviews: {
-          select: { rating: true },
-        },
-      },
+      include: equipmentInclude,
       orderBy,
       skip,
       take,
     }),
   ]);
 
+  let items = attachEquipmentReviewSummaries(rows);
+  if (filters.sort === "rating") {
+    items = [...items].sort((a, b) => {
+      const ar = a.averageRating ?? 0;
+      const br = b.averageRating ?? 0;
+      return br - ar;
+    });
+  }
+
   return { items, total };
 }
 
-export async function getEquipmentById(id: string) {
-  const row = await prisma.equipment.findUnique({
-    where: { id },
-    include: {
-      owner: {
-        select: {
-          id: true,
-          name: true,
-          image: true,
-          role: true,
-          createdAt: true,
-        },
-      },
-      reviews: {
-        include: {
-          reviewer: { select: { id: true, name: true, image: true } },
-        },
-        orderBy: { createdAt: "desc" },
-      },
-    },
+export async function listOwnerEquipment(ownerId: string) {
+  const rows = await prisma.equipment.findMany({
+    where: { ownerId },
+    include: equipmentInclude,
+    orderBy: { createdAt: "desc" },
   });
-  if (!row) {
+  return attachEquipmentReviewSummaries(rows);
+}
+
+export async function getEquipmentById(id: string, viewerUserId?: string) {
+  const base = await prisma.equipment.findUnique({ where: { id } });
+  if (!base) {
     throw new NotFoundError("Equipment");
   }
-  return row;
+  assertCanViewEquipment(base, viewerUserId);
+
+  const full = await prisma.equipment.findUnique({
+    where: { id },
+    include: equipmentDetailInclude(viewerUserId, base.ownerId),
+  });
+  if (!full) {
+    throw new NotFoundError("Equipment");
+  }
+
+  const approvedReviews = full.reviews.filter((r) => r.status === ReviewStatus.APPROVED);
+  const summary = attachEquipmentReviewSummary({ ...full, reviews: approvedReviews });
+  return { ...summary, reviews: full.reviews };
 }
 
 export async function createEquipment(
@@ -159,7 +235,7 @@ export async function createEquipment(
   data: {
     title: string;
     description: string;
-    category: Category;
+    categoryId: string;
     dailyRate: number;
     weeklyRate?: number;
     depositAmount: number;
@@ -169,11 +245,18 @@ export async function createEquipment(
     imageKeys?: string[];
   }
 ) {
-  return prisma.equipment.create({
+  await assertCategoryId(data.categoryId);
+
+  const owner = await prisma.user.findUnique({
+    where: { id: ownerId },
+    select: { name: true },
+  });
+
+  const row = await prisma.equipment.create({
     data: {
       title: data.title,
       description: data.description,
-      category: data.category,
+      categoryId: data.categoryId,
       dailyRate: data.dailyRate,
       weeklyRate: data.weeklyRate,
       depositAmount: data.depositAmount,
@@ -182,8 +265,17 @@ export async function createEquipment(
       images: data.images ?? [],
       imageKeys: alignImageKeys(data.images ?? [], data.imageKeys ?? []),
       ownerId,
+      approvalStatus: EquipmentApprovalStatus.PENDING,
+      isAvailable: false,
     },
+    include: equipmentInclude,
   });
+
+  void notifyEquipmentPendingReview(row.id, row.title, owner?.name ?? "Owner").catch(
+    () => undefined
+  );
+
+  return row;
 }
 
 export async function updateEquipment(
@@ -192,7 +284,7 @@ export async function updateEquipment(
   data: Partial<{
     title: string;
     description: string;
-    category: Category;
+    categoryId: string;
     dailyRate: number;
     weeklyRate: number | null;
     depositAmount: number;
@@ -208,6 +300,16 @@ export async function updateEquipment(
     throw new NotFoundError("Equipment");
   }
 
+  if (data.isAvailable === true && existing.approvalStatus !== EquipmentApprovalStatus.APPROVED) {
+    throw new ValidationError(
+      "Listing must be approved by an admin before it can go live in search"
+    );
+  }
+
+  if (data.categoryId !== undefined) {
+    await assertCategoryId(data.categoryId);
+  }
+
   const mergedImages = data.images !== undefined ? data.images : existing.images;
   const mergedKeys = alignImageKeys(
     mergedImages,
@@ -221,15 +323,38 @@ export async function updateEquipment(
     );
   }
 
-  const { images: _i, imageKeys: _k, ...rest } = data;
-  return prisma.equipment.update({
+  const resubmit =
+    existing.approvalStatus === EquipmentApprovalStatus.REJECTED &&
+    (data.title !== undefined ||
+      data.description !== undefined ||
+      data.images !== undefined ||
+      data.categoryId !== undefined);
+
+  const { images: _i, imageKeys: _k, isAvailable, ...rest } = data;
+  const row = await prisma.equipment.update({
     where: { id },
     data: {
       ...rest,
+      ...(isAvailable !== undefined ? { isAvailable } : {}),
       ...(data.images !== undefined ? { images: mergedImages } : {}),
       ...(data.images !== undefined || data.imageKeys !== undefined ? { imageKeys: mergedKeys } : {}),
+      ...(resubmit
+        ? {
+            approvalStatus: EquipmentApprovalStatus.PENDING,
+            isAvailable: false,
+            rejectionNote: null,
+            approvedAt: null,
+          }
+        : {}),
     },
+    include: equipmentInclude,
   });
+
+  if (resubmit) {
+    void notifyEquipmentPendingReview(row.id, row.title, row.owner.name).catch(() => undefined);
+  }
+
+  return row;
 }
 
 export async function deleteEquipment(id: string, ownerId: string) {
@@ -247,7 +372,16 @@ export async function deleteEquipment(id: string, ownerId: string) {
   await prisma.equipment.delete({ where: { id } });
 }
 
-export async function getAvailability(equipmentId: string, month: string) {
+export async function getAvailability(equipmentId: string, month: string, viewerUserId?: string) {
+  const equipment = await prisma.equipment.findUnique({
+    where: { id: equipmentId },
+    select: { ownerId: true, approvalStatus: true },
+  });
+  if (!equipment) {
+    throw new NotFoundError("Equipment");
+  }
+  assertCanViewEquipment(equipment, viewerUserId);
+
   const start = new Date(`${month}-01T00:00:00.000Z`);
   if (Number.isNaN(start.getTime())) {
     throw new ValidationError("Invalid month format. Use YYYY-MM.");

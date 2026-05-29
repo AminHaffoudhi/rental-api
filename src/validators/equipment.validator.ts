@@ -1,10 +1,9 @@
-import { Category } from "@prisma/client";
 import { z } from "zod";
 
 export const createEquipmentSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
-  category: z.nativeEnum(Category),
+  categoryId: z.string().min(1),
   dailyRate: z.number().positive(),
   weeklyRate: z.number().positive().optional(),
   depositAmount: z.number().nonnegative(),
