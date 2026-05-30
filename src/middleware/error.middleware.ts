@@ -1,6 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
-import { Prisma } from "@prisma/client";
-import { PrismaClientInitializationError } from "@prisma/client/runtime/library";
+import {
+  PrismaClientInitializationError,
+  PrismaClientKnownRequestError,
+  PrismaClientValidationError,
+} from "@prisma/client/runtime/library";
 import * as Sentry from "@sentry/node";
 import { StatusCodes } from "http-status-codes";
 import { ZodError } from "zod";
@@ -50,7 +53,7 @@ export function errorMiddleware(
     return;
   }
 
-  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+  if (err instanceof PrismaClientKnownRequestError) {
     logger.warn("Prisma known error", { requestId, code: err.code, meta: err.meta });
 
     switch (err.code) {
@@ -113,7 +116,7 @@ export function errorMiddleware(
     }
   }
 
-  if (err instanceof Prisma.PrismaClientValidationError) {
+  if (err instanceof PrismaClientValidationError) {
     logger.error("Prisma validation error", { requestId, message: err.message });
     res.status(StatusCodes.BAD_REQUEST).json({
       success: false,

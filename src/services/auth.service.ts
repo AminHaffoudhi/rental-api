@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
-import { CodeType, Prisma, type Role, type User } from "@prisma/client";
+import { CodeType, type Role, type User } from "@prisma/client";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 import { ConflictError, NotFoundError, BusinessError } from "@/lib/errors";
 import logger from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
@@ -46,7 +47,7 @@ export async function register(data: {
       },
     });
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+    if (e instanceof PrismaClientKnownRequestError && e.code === "P2002") {
       throw new ConflictError("An account with this email already exists");
     }
     throw e;
