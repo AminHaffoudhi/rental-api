@@ -86,6 +86,14 @@ export async function ownerCompleteReturn(req: Request, res: Response): Promise<
   success(res, booking);
 }
 
+export async function completeRental(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const booking = await bookingService.completeRental(pathParam(req.params.id), req.user.id);
+  success(res, booking);
+}
+
 export async function requestReturn(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     throw new UnauthorizedError();

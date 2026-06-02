@@ -6,12 +6,13 @@ export type BookingStateConfigEntry = {
   allowedTransitions: BookingStatus[];
 };
 
+/** Simplified happy path: Pending → Pay → Active → Completed */
 export const BookingStateConfig: Record<BookingStatus, BookingStateConfigEntry> = {
   [BookingStatus.PENDING]: {
     label: "Pending",
     color: "amber",
     allowedTransitions: [
-      BookingStatus.CONFIRMED,
+      BookingStatus.PAYMENT_PENDING,
       BookingStatus.REJECTED,
       BookingStatus.CANCELLED,
     ],
@@ -24,17 +25,17 @@ export const BookingStateConfig: Record<BookingStatus, BookingStateConfigEntry> 
   [BookingStatus.PAYMENT_PENDING]: {
     label: "Payment pending",
     color: "orange",
-    allowedTransitions: [BookingStatus.PAID],
+    allowedTransitions: [BookingStatus.PAID, BookingStatus.ACTIVE, BookingStatus.CANCELLED],
   },
   [BookingStatus.PAID]: {
     label: "Paid",
     color: "green",
-    allowedTransitions: [BookingStatus.PICKUP_SCHEDULED],
+    allowedTransitions: [BookingStatus.ACTIVE],
   },
   [BookingStatus.PICKUP_SCHEDULED]: {
     label: "Pickup scheduled",
     color: "cyan",
-    allowedTransitions: [BookingStatus.IN_TRANSIT],
+    allowedTransitions: [BookingStatus.ACTIVE, BookingStatus.IN_TRANSIT],
   },
   [BookingStatus.IN_TRANSIT]: {
     label: "In transit",
@@ -44,17 +45,17 @@ export const BookingStateConfig: Record<BookingStatus, BookingStateConfigEntry> 
   [BookingStatus.ACTIVE]: {
     label: "Active",
     color: "emerald",
-    allowedTransitions: [BookingStatus.RETURN_SCHEDULED],
+    allowedTransitions: [BookingStatus.COMPLETED, BookingStatus.DISPUTED],
   },
   [BookingStatus.RETURN_SCHEDULED]: {
     label: "Return scheduled",
     color: "indigo",
-    allowedTransitions: [BookingStatus.RETURNING],
+    allowedTransitions: [BookingStatus.COMPLETED, BookingStatus.RETURNING],
   },
   [BookingStatus.RETURNING]: {
     label: "Returning",
     color: "violet",
-    allowedTransitions: [BookingStatus.INSPECTING],
+    allowedTransitions: [BookingStatus.COMPLETED, BookingStatus.INSPECTING],
   },
   [BookingStatus.INSPECTING]: {
     label: "Inspecting",

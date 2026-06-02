@@ -32,6 +32,7 @@ import {
   notifyBookingRequest,
   notifyDeliveryScheduled,
   notifyDisputeOpened,
+  notifyPaymentConfirmed,
 } from "@/services/notification.service";
 import { addDays, endOfDay, getDaysBetween, startOfDay } from "@/utils/dates";
 
@@ -275,9 +276,9 @@ export async function approveBooking(bookingId: string, ownerId: string): Promis
     throw new BusinessError("Booking is not pending approval");
   }
 
-  let current = await prisma.booking.update({
+  const current = await prisma.booking.update({
     where: { id: bookingId },
-    data: { status: BookingStatus.CONFIRMED },
+    data: { status: BookingStatus.PAYMENT_PENDING },
     include: {
       equipment: true,
       owner: true,
@@ -290,18 +291,6 @@ export async function approveBooking(bookingId: string, ownerId: string): Promis
     logNonCriticalEmailFailure("booking_confirmed", err, { bookingId: bookingId })
   );
   void notifyBookingApproved(current.renterId, current.equipment.title, bookingId).catch(() => {});
-
-  current = await prisma.booking.update({
-    where: { id: bookingId },
-    data: { status: BookingStatus.PAYMENT_PENDING },
-    include: {
-      equipment: true,
-      owner: true,
-      renter: true,
-      delivery: true,
-      payment: true,
-    },
-  });
 
   return current;
 }
@@ -372,10 +361,132 @@ const ownerHandoverStatuses: BookingStatus[] = [
 ];
 
 const ownerReturnCompleteStatuses: BookingStatus[] = [
+  BookingStatus.ACTIVE,
   BookingStatus.RETURN_SCHEDULED,
   BookingStatus.RETURNING,
   BookingStatus.INSPECTING,
 ];
+
+const completeRentalStatuses: BookingStatus[] = [
+  BookingStatus.ACTIVE,
+  BookingStatus.RETURN_SCHEDULED,
+  BookingStatus.RETURNING,
+  BookingStatus.INSPECTING,
+];
+
+/** After payment: rental is active (no separate delivery scheduling step). */
+export async function activateRentalAfterPayment(
+  bookingId: string,
+  paymentMeta?: { confirmedBy?: string; stripeCheckoutSessionId?: string; stripePaymentIntentId?: string }
+): Promise<Booking> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: {
+      payment: true,
+      delivery: true,
+      equipment: { select: { title: true } },
+      renter: true,
+      owner: true,
+    },
+  });
+  if (!booking || !booking.payment) {
+    throw new NotFoundError("Booking");
+  }
+
+  if (booking.status === BookingStatus.ACTIVE && booking.payment.status === PaymentStatus.CONFIRMED) {
+    return prisma.booking.findUniqueOrThrow({
+      where: { id: bookingId },
+      include: bookingDetailInclude,
+    });
+  }
+
+  if (booking.status !== BookingStatus.PAYMENT_PENDING && booking.status !== BookingStatus.PAID) {
+    throw new BusinessError("Booking is not awaiting payment activation");
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.payment.update({
+      where: { bookingId },
+      data: {
+        status: PaymentStatus.CONFIRMED,
+        confirmedAt: new Date(),
+        confirmedBy: paymentMeta?.confirmedBy ?? "system",
+        ...(paymentMeta?.stripeCheckoutSessionId
+          ? { stripeCheckoutSessionId: paymentMeta.stripeCheckoutSessionId }
+          : {}),
+        ...(paymentMeta?.stripePaymentIntentId
+          ? { stripePaymentIntentId: paymentMeta.stripePaymentIntentId }
+          : {}),
+      },
+    });
+
+    const existingDelivery = await tx.delivery.findUnique({ where: { bookingId } });
+    if (existingDelivery) {
+      await tx.delivery.update({
+        where: { bookingId },
+        data: { status: DeliveryStatus.DELIVERED },
+      });
+    } else {
+      await tx.delivery.create({
+        data: {
+          bookingId,
+          status: DeliveryStatus.DELIVERED,
+          pickupPhotos: [],
+          returnPhotos: [],
+        },
+      });
+    }
+
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.ACTIVE },
+      include: bookingDetailInclude,
+    });
+  });
+
+  void notifyPaymentConfirmed(
+    updated.renterId,
+    updated.ownerId,
+    updated.equipment.title,
+    updated.id
+  ).catch(() => undefined);
+
+  return updated;
+}
+
+/** Owner or renter closes an active rental in one step. */
+export async function completeRental(bookingId: string, userId: string): Promise<Booking> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { delivery: true, payment: true },
+  });
+  if (!booking || (booking.renterId !== userId && booking.ownerId !== userId)) {
+    throw new NotFoundError("Booking");
+  }
+  if (!completeRentalStatuses.includes(booking.status)) {
+    throw new BusinessError("This rental cannot be completed yet");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (booking.delivery) {
+      await tx.delivery.update({
+        where: { bookingId },
+        data: { status: DeliveryStatus.RETURNED },
+      });
+    }
+    if (booking.payment?.status === PaymentStatus.CONFIRMED) {
+      await tx.payment.update({
+        where: { bookingId },
+        data: { status: PaymentStatus.PAYOUT_PENDING },
+      });
+    }
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.COMPLETED },
+      include: bookingDetailInclude,
+    });
+  });
+}
 
 /** Owner marks equipment handed to renter (skips agent steps for self-coordinated delivery). */
 export async function ownerHandoverToRenter(bookingId: string, ownerId: string): Promise<Booking> {
@@ -405,41 +516,12 @@ export async function ownerHandoverToRenter(bookingId: string, ownerId: string):
   });
 }
 
-/** Owner confirms return in good condition and closes the rental. */
+/** @deprecated Use completeRental — kept for older clients */
 export async function ownerConfirmReturnComplete(
   bookingId: string,
   ownerId: string
 ): Promise<Booking> {
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    include: { delivery: true, payment: true },
-  });
-  if (!booking || booking.ownerId !== ownerId) {
-    throw new NotFoundError("Booking");
-  }
-  if (!ownerReturnCompleteStatuses.includes(booking.status)) {
-    throw new BusinessError("This booking cannot be completed from its current state");
-  }
-
-  return prisma.$transaction(async (tx) => {
-    if (booking.delivery) {
-      await tx.delivery.update({
-        where: { bookingId },
-        data: { status: DeliveryStatus.RETURNED },
-      });
-    }
-    if (booking.payment?.status === PaymentStatus.CONFIRMED) {
-      await tx.payment.update({
-        where: { bookingId },
-        data: { status: PaymentStatus.PAYOUT_PENDING },
-      });
-    }
-    return tx.booking.update({
-      where: { id: bookingId },
-      data: { status: BookingStatus.COMPLETED },
-      include: bookingDetailInclude,
-    });
-  });
+  return completeRental(bookingId, ownerId);
 }
 
 export async function confirmDelivery(bookingId: string, renterId: string): Promise<Booking> {

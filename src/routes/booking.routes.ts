@@ -26,6 +26,7 @@ router.post("/:id/cancel", asyncHandler(bookingController.cancel));
 router.post("/:id/confirm-delivery", asyncHandler(bookingController.confirmDelivery));
 router.post("/:id/owner-handover", asyncHandler(bookingController.ownerHandover));
 router.post("/:id/owner-complete-return", asyncHandler(bookingController.ownerCompleteReturn));
+router.post("/:id/complete", asyncHandler(bookingController.completeRental));
 router.post("/:id/return-request", asyncHandler(bookingController.requestReturn));
 router.post("/:id/dispute", validate(raiseDisputeSchema), asyncHandler(bookingController.dispute));
 

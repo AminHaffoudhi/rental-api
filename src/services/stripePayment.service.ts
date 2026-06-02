@@ -1,10 +1,10 @@
-import { BookingStatus, DeliveryStatus, PaymentStatus, type Booking } from "@prisma/client";
+import { BookingStatus, PaymentStatus } from "@prisma/client";
 import type Stripe from "stripe";
 import { CLIENT_URL, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET, isStripeConfigured } from "@/config/env";
 import { BusinessError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 import { getStripe } from "@/lib/stripe";
-import { notifyPaymentConfirmed } from "@/services/notification.service";
+import { activateRentalAfterPayment } from "@/services/booking.service";
 
 function toMinorUnits(amount: number): number {
   const minor = Math.round(amount * 100);
@@ -17,77 +17,12 @@ function toMinorUnits(amount: number): number {
 export async function confirmBookingPaymentFromStripe(
   bookingId: string,
   stripeIds: { sessionId?: string; paymentIntentId?: string }
-): Promise<Booking> {
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    include: {
-      payment: true,
-      delivery: true,
-      equipment: { select: { title: true } },
-      renter: { select: { id: true, email: true, name: true } },
-      owner: { select: { id: true, name: true } },
-    },
+) {
+  return activateRentalAfterPayment(bookingId, {
+    confirmedBy: "stripe",
+    stripeCheckoutSessionId: stripeIds.sessionId,
+    stripePaymentIntentId: stripeIds.paymentIntentId,
   });
-  if (!booking || !booking.payment) {
-    throw new NotFoundError("Booking");
-  }
-
-  if (booking.payment.status === PaymentStatus.CONFIRMED && booking.status === BookingStatus.PAID) {
-    return booking;
-  }
-
-  if (booking.status !== BookingStatus.PAYMENT_PENDING) {
-    throw new BusinessError("Booking is not awaiting payment");
-  }
-  if (booking.payment.status !== PaymentStatus.PENDING) {
-    throw new BusinessError("Payment is not pending");
-  }
-
-  const updated = await prisma.$transaction(async (tx) => {
-    await tx.payment.update({
-      where: { bookingId },
-      data: {
-        status: PaymentStatus.CONFIRMED,
-        confirmedAt: new Date(),
-        confirmedBy: "stripe",
-        ...(stripeIds.sessionId ? { stripeCheckoutSessionId: stripeIds.sessionId } : {}),
-        ...(stripeIds.paymentIntentId ? { stripePaymentIntentId: stripeIds.paymentIntentId } : {}),
-      },
-    });
-
-    const existingDelivery = await tx.delivery.findUnique({ where: { bookingId } });
-    if (!existingDelivery) {
-      await tx.delivery.create({
-        data: {
-          bookingId,
-          status: DeliveryStatus.SCHEDULED,
-          pickupPhotos: [],
-          returnPhotos: [],
-        },
-      });
-    }
-
-    return tx.booking.update({
-      where: { id: bookingId },
-      data: { status: BookingStatus.PAID },
-      include: {
-        equipment: true,
-        renter: true,
-        owner: true,
-        payment: true,
-        delivery: true,
-      },
-    });
-  });
-
-  void notifyPaymentConfirmed(
-    updated.renterId,
-    updated.ownerId,
-    updated.equipment.title,
-    updated.id
-  ).catch(() => undefined);
-
-  return updated;
 }
 
 export async function createStripeCheckoutSession(
