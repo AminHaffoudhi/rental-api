@@ -1,301 +1,17 @@
-import {
-  CreateBucketCommand,
-  DeleteObjectCommand,
-  GetObjectCommand,
-  HeadBucketCommand,
-  HeadObjectCommand,
-  ListBucketsCommand,
-  PutBucketCorsCommand,
-  PutBucketPolicyCommand,
-  PutObjectCommand,
-  S3Client,
-  type S3ServiceException,
-} from "@aws-sdk/client-s3";
-import { ExternalServiceError } from "@/lib/errors";
-import { buildAllowedOrigins } from "@/lib/corsOrigins";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import path from "node:path";
-import {
-  STORAGE_ACCESS_KEY,
-  STORAGE_ENDPOINT,
-  STORAGE_PRIVATE_BUCKET,
-  STORAGE_PUBLIC_BASE_URL,
-  STORAGE_PUBLIC_BUCKET,
-  STORAGE_REGION,
-  STORAGE_SECRET_KEY,
-} from "@/config/env";
+import { randomUUID } from "node:crypto";
+import type { UploadApiResponse } from "cloudinary";
+import { CLOUDINARY_FOLDER } from "@/config/env";
+import { BusinessError, ExternalServiceError } from "@/lib/errors";
+import { cloudinary } from "@/lib/cloudinary";
 import logger from "@/lib/logger";
 
-export const PUBLIC_BUCKET = STORAGE_PUBLIC_BUCKET;
-export const PRIVATE_BUCKET = STORAGE_PRIVATE_BUCKET;
-export const PUBLIC_BASE = STORAGE_PUBLIC_BASE_URL;
-
-export const s3 = new S3Client({
-  region: STORAGE_REGION,
-  endpoint: STORAGE_ENDPOINT,
-  credentials: {
-    accessKeyId: STORAGE_ACCESS_KEY,
-    secretAccessKey: STORAGE_SECRET_KEY,
-  },
-  forcePathStyle: true,
-});
-
-const STORAGE_AUTH_HINT =
-  "Check MINIO_ACCESS_KEY and MINIO_SECRET_KEY in rental-api/.env — they must match your MinIO server (often the same as MINIO_ROOT_USER / MINIO_ROOT_PASSWORD from docker run).";
-
-function maskAccessKey(key: string): string {
-  if (key.length <= 4) {
-    return "****";
-  }
-  return `${key.slice(0, 4)}***`;
-}
-
-export function isStorageAuthError(err: unknown): boolean {
-  const name =
-    err && typeof err === "object" && "name" in err && typeof err.name === "string"
-      ? err.name
-      : "";
-  return name === "InvalidAccessKeyId" || name === "SignatureDoesNotMatch";
-}
-
-export function toStorageError(err: unknown, action: string): ExternalServiceError {
-  if (isStorageAuthError(err)) {
-    return new ExternalServiceError(
-      "MinIO",
-      `Invalid storage credentials while ${action}. ${STORAGE_AUTH_HINT}`,
-      err instanceof Error ? err : undefined
-    );
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return new ExternalServiceError(
-    "MinIO",
-    `Storage error while ${action}: ${message}`,
-    err instanceof Error ? err : undefined
-  );
-}
-
-async function verifyStorageAuth(): Promise<void> {
-  try {
-    await s3.send(new ListBucketsCommand({}));
-    logger.info("MinIO credentials OK", {
-      endpoint: STORAGE_ENDPOINT,
-      accessKey: maskAccessKey(STORAGE_ACCESS_KEY),
-    });
-  } catch (err) {
-    const s3Err = err as S3ServiceException;
-    logger.error("MinIO authentication failed — uploads will not work", {
-      endpoint: STORAGE_ENDPOINT,
-      accessKey: maskAccessKey(STORAGE_ACCESS_KEY),
-      error: s3Err.message,
-      code: s3Err.name,
-      hint: STORAGE_AUTH_HINT,
-    });
-    throw toStorageError(err, "connecting to storage");
-  }
-}
-
-async function bucketExists(bucket: string): Promise<boolean> {
-  try {
-    await s3.send(new HeadBucketCommand({ Bucket: bucket }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function createPublicBucket(bucket: string): Promise<void> {
-  await s3.send(new CreateBucketCommand({ Bucket: bucket }));
-  const policy = JSON.stringify({
-    Version: "2012-10-17",
-    Statement: [
-      {
-        Effect: "Allow",
-        Principal: "*",
-        Action: ["s3:GetObject"],
-        Resource: [`arn:aws:s3:::${bucket}/*`],
-      },
-    ],
-  });
-  await s3.send(new PutBucketPolicyCommand({ Bucket: bucket, Policy: policy }));
-}
-
-async function createPrivateBucket(bucket: string): Promise<void> {
-  await s3.send(new CreateBucketCommand({ Bucket: bucket }));
-}
-
-async function configureBucketCors(bucket: string): Promise<void> {
-  const origins = buildAllowedOrigins();
-  if (process.env.NODE_ENV !== "production") {
-    origins.push("*");
-  }
-  const uniqueOrigins = Array.from(new Set(origins));
-  try {
-    await s3.send(
-      new PutBucketCorsCommand({
-        Bucket: bucket,
-        CORSConfiguration: {
-          CORSRules: [
-            {
-              AllowedHeaders: ["*"],
-              AllowedMethods: ["GET", "PUT", "POST", "HEAD", "DELETE"],
-              AllowedOrigins: uniqueOrigins,
-              ExposeHeaders: ["ETag", "Content-Length"],
-              MaxAgeSeconds: 3600,
-            },
-          ],
-        },
-      })
-    );
-    logger.debug("MinIO bucket CORS configured", { bucket, origins: uniqueOrigins });
-  } catch (err) {
-    logger.warn("MinIO bucket CORS configuration failed (browser PUT may fail)", {
-      bucket,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-export async function initStorage(): Promise<void> {
-  try {
-    await verifyStorageAuth();
-
-    if (!(await bucketExists(PUBLIC_BUCKET))) {
-      await createPublicBucket(PUBLIC_BUCKET);
-      logger.info(`MinIO bucket created: ${PUBLIC_BUCKET} (public read)`);
-    } else {
-      logger.info(`MinIO bucket ready: ${PUBLIC_BUCKET}`);
-    }
-
-    if (!(await bucketExists(PRIVATE_BUCKET))) {
-      await createPrivateBucket(PRIVATE_BUCKET);
-      logger.info(`MinIO bucket created: ${PRIVATE_BUCKET} (private)`);
-    } else {
-      logger.info(`MinIO bucket ready: ${PRIVATE_BUCKET}`);
-    }
-
-    await configureBucketCors(PUBLIC_BUCKET);
-    await configureBucketCors(PRIVATE_BUCKET);
-
-    logger.info("MinIO storage initialized", { endpoint: STORAGE_ENDPOINT });
-  } catch (err) {
-    const detail =
-      err instanceof Error
-        ? { name: err.name, message: err.message, stack: err.stack }
-        : { raw: String(err) };
-    const meta = err && typeof err === "object" && "$metadata" in err ? (err as { $metadata?: unknown }).$metadata : undefined;
-    logger.error("MinIO initialization failed", {
-      ...detail,
-      ...(meta ? { $metadata: meta } : {}),
-      endpoint: STORAGE_ENDPOINT,
-      hint:
-        "Start MinIO on this host:port (e.g. docker run -p 9000:9000 minio/minio server /data). If connection fails, try MINIO_ENDPOINT=http://127.0.0.1:9000 instead of localhost (IPv6).",
-    });
-  }
-}
+/** Sentinel values kept for API compatibility (bucket field in upload responses). */
+export const PUBLIC_BUCKET = "cloudinary";
+export const PRIVATE_BUCKET = "cloudinary-authenticated";
 
 export type UploadFolder = "equipment" | "avatars" | "covers" | "kyc" | "delivery" | "categories";
-
-export function generateFileKey(folder: UploadFolder, userId: string, originalName: string): string {
-  const ext = path.extname(originalName).replace(/^\./, "").toLowerCase() || "jpg";
-  const safeExt = ext.replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
-  return `${folder}/${userId}/${randomUUID()}.${safeExt}`;
-}
-
-export interface PresignedUploadResult {
-  uploadUrl: string;
-  fileKey: string;
-  bucket: string;
-  expiresIn: number;
-}
-
-export async function generatePresignedUploadUrl(
-  bucket: string,
-  fileKey: string,
-  contentType: string,
-  expiresIn = 300
-): Promise<PresignedUploadResult> {
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: fileKey,
-    ContentType: contentType,
-  });
-  let uploadUrl = await getSignedUrl(s3, command, { expiresIn });
-  uploadUrl = rewritePresignedUrlForBrowser(uploadUrl);
-  return { uploadUrl, fileKey, bucket, expiresIn };
-}
-
-/** Optional MINIO_BROWSER_ENDPOINT — same host the browser uses (e.g. http://127.0.0.1:9000). */
-function rewritePresignedUrlForBrowser(signedUrl: string): string {
-  const browserBase = process.env.MINIO_BROWSER_ENDPOINT?.trim();
-  if (!browserBase) {
-    return signedUrl;
-  }
-  try {
-    const signed = new URL(signedUrl);
-    const browser = new URL(browserBase);
-    signed.protocol = browser.protocol;
-    signed.host = browser.host;
-    return signed.toString();
-  } catch {
-    return signedUrl;
-  }
-}
-
-export async function putObjectBuffer(
-  bucket: string,
-  fileKey: string,
-  body: Buffer,
-  contentType: string
-): Promise<void> {
-  try {
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: fileKey,
-        Body: body,
-        ContentType: contentType,
-      })
-    );
-  } catch (err) {
-    throw toStorageError(err, "uploading file");
-  }
-}
-
-export async function generatePresignedDownloadUrl(
-  bucket: string,
-  fileKey: string,
-  expiresIn = 3600
-): Promise<string> {
-  const command = new GetObjectCommand({ Bucket: bucket, Key: fileKey });
-  return getSignedUrl(s3, command, { expiresIn });
-}
-
-export function getPublicUrl(fileKey: string): string {
-  return `${PUBLIC_BASE}/${fileKey}`;
-}
-
-export async function objectExists(bucket: string, fileKey: string): Promise<boolean> {
-  try {
-    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: fileKey }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function deleteFile(bucket: string, fileKey: string): Promise<void> {
-  try {
-    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: fileKey }));
-    logger.debug("Storage object deleted", { bucket, fileKey });
-  } catch (err) {
-    logger.warn("Failed to delete storage object", {
-      bucket,
-      fileKey,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
 
 export const ALLOWED_IMAGE_TYPES = [
   "image/jpeg",
@@ -308,6 +24,25 @@ export const ALLOWED_IMAGE_TYPES = [
 
 export const ALLOWED_DOCUMENT_TYPES = [...ALLOWED_IMAGE_TYPES, "application/pdf"];
 
+function isPrivateFolder(folder: UploadFolder): boolean {
+  return folder === "kyc";
+}
+
+function deliveryType(folder: UploadFolder): "authenticated" | "upload" {
+  return isPrivateFolder(folder) ? "authenticated" : "upload";
+}
+
+function prefixPublicId(folder: UploadFolder, userId: string, originalName: string): string {
+  const ext = path.extname(originalName).replace(/^\./, "").toLowerCase() || "jpg";
+  const safeExt = ext.replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
+  const base = CLOUDINARY_FOLDER ? `${CLOUDINARY_FOLDER}/` : "";
+  return `${base}${folder}/${userId}/${randomUUID()}.${safeExt}`;
+}
+
+export function generateFileKey(folder: UploadFolder, userId: string, originalName: string): string {
+  return prefixPublicId(folder, userId, originalName);
+}
+
 export function validateFileType(contentType: string, allowed: string[]): boolean {
   return allowed.includes(contentType.toLowerCase());
 }
@@ -316,11 +51,216 @@ export function validateFileSize(sizeBytes: number, maxMB: number): boolean {
   return sizeBytes <= maxMB * 1024 * 1024;
 }
 
-/** Extract object key if URL was produced by getPublicUrl for this deployment. */
-export function tryExtractKeyFromPublicUrl(url: string): string | null {
-  const base = `${PUBLIC_BASE}/`;
-  if (url.startsWith(base)) {
-    return url.slice(base.length);
+function cloudinaryHttpCode(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const top = err as { http_code?: number; error?: { http_code?: number } };
+  return top.http_code ?? top.error?.http_code;
+}
+
+export function formatCloudinaryError(err: unknown): string {
+  if (err instanceof Error && err.message && err.message !== "[object Object]") {
+    return err.message;
   }
-  return null;
+  if (err && typeof err === "object") {
+    const o = err as {
+      message?: string;
+      error?: { message?: string };
+    };
+    if (typeof o.message === "string" && o.message) return o.message;
+    if (typeof o.error?.message === "string" && o.error.message) return o.error.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
+export function isStorageAuthError(err: unknown): boolean {
+  return cloudinaryHttpCode(err) === 401;
+}
+
+export function toStorageError(err: unknown, action: string): ExternalServiceError {
+  const detail = formatCloudinaryError(err);
+  if (isStorageAuthError(err)) {
+    const hint = detail.toLowerCase().includes("cloud_name")
+      ? " CLOUDINARY_CLOUD_NAME must be the exact value from Cloudinary → Dashboard → API Keys (usually lowercase, e.g. dxxxx), not your account display name."
+      : "";
+    return new ExternalServiceError(
+      "Cloudinary",
+      `Invalid Cloudinary credentials while ${action}: ${detail}.${hint}`,
+      err instanceof Error ? err : undefined
+    );
+  }
+  return new ExternalServiceError(
+    "Cloudinary",
+    `Storage error while ${action}: ${detail}`,
+    err instanceof Error ? err : undefined
+  );
+}
+
+export async function initStorage(): Promise<void> {
+  try {
+    await cloudinary.api.ping();
+    logger.info("Cloudinary storage ready", { folder: CLOUDINARY_FOLDER || "(root)" });
+  } catch (err) {
+    logger.error("Cloudinary initialization failed", {
+      error: formatCloudinaryError(err),
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      hint:
+        "Use the exact Cloud name from Cloudinary → API Keys (not the account title). Example: CLOUDINARY_CLOUD_NAME=dxyz123abc",
+    });
+  }
+}
+
+function uploadBuffer(
+  buffer: Buffer,
+  publicId: string,
+  folder: UploadFolder
+): Promise<UploadApiResponse> {
+  const type = deliveryType(folder);
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        public_id: publicId,
+        resource_type: "auto",
+        type,
+        overwrite: false,
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!result) {
+          reject(new Error("Cloudinary upload returned no result"));
+          return;
+        }
+        resolve(result);
+      }
+    );
+    Readable.from(buffer).pipe(stream);
+  });
+}
+
+function folderFromPublicId(publicId: string): UploadFolder {
+  const parts = publicId.split("/");
+  const idx = CLOUDINARY_FOLDER ? 1 : 0;
+  const segment = parts[idx];
+  const allowed: UploadFolder[] = [
+    "equipment",
+    "avatars",
+    "covers",
+    "kyc",
+    "delivery",
+    "categories",
+  ];
+  return allowed.includes(segment as UploadFolder) ? (segment as UploadFolder) : "equipment";
+}
+
+export async function putObjectBuffer(
+  _bucket: string,
+  fileKey: string,
+  body: Buffer,
+  _contentType: string
+): Promise<UploadApiResponse> {
+  try {
+    return await uploadBuffer(body, fileKey, folderFromPublicId(fileKey));
+  } catch (err) {
+    throw toStorageError(err, "uploading file");
+  }
+}
+
+export function getPublicUrl(publicId: string): string {
+  return cloudinary.url(publicId, {
+    secure: true,
+    resource_type: "auto",
+    type: "upload",
+  });
+}
+
+export function getAuthenticatedUrl(publicId: string, expiresInSeconds = 3600): string {
+  const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
+  return cloudinary.url(publicId, {
+    secure: true,
+    resource_type: "auto",
+    type: "authenticated",
+    sign_url: true,
+    expires_at: expiresAt,
+  });
+}
+
+export async function generatePresignedDownloadUrl(
+  bucket: string,
+  fileKey: string,
+  expiresIn = 3600
+): Promise<string> {
+  if (bucket !== PRIVATE_BUCKET) {
+    return getPublicUrl(fileKey);
+  }
+  return getAuthenticatedUrl(fileKey, expiresIn);
+}
+
+export interface PresignedUploadResult {
+  uploadUrl: string;
+  fileKey: string;
+  bucket: string;
+  expiresIn: number;
+}
+
+/** @deprecated Use POST /api/upload/direct — Cloudinary uses multipart POST, not S3 PUT. */
+export async function generatePresignedUploadUrl(
+  _bucket: string,
+  _fileKey: string,
+  _contentType: string,
+  _expiresIn = 300
+): Promise<PresignedUploadResult> {
+  throw new BusinessError("Use POST /api/upload/direct for file uploads.");
+}
+
+export async function objectExists(bucket: string, fileKey: string): Promise<boolean> {
+  const type = bucket === PRIVATE_BUCKET ? "authenticated" : "upload";
+  try {
+    await cloudinary.api.resource(fileKey, { resource_type: "auto", type });
+    return true;
+  } catch (err) {
+    const httpCode =
+      err && typeof err === "object" && "error" in err
+        ? (err as { error?: { http_code?: number } }).error?.http_code
+        : undefined;
+    if (httpCode === 404) {
+      return false;
+    }
+    throw toStorageError(err, "checking file");
+  }
+}
+
+export async function deleteFile(_bucket: string, fileKey: string): Promise<void> {
+  const isKyc = fileKey.includes("/kyc/");
+  try {
+    await cloudinary.uploader.destroy(fileKey, {
+      resource_type: "auto",
+      type: isKyc ? "authenticated" : "upload",
+      invalidate: true,
+    });
+    logger.debug("Cloudinary asset deleted", { publicId: fileKey });
+  } catch (err) {
+    logger.warn("Failed to delete Cloudinary asset", {
+      publicId: fileKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Extract public_id from a Cloudinary delivery URL. */
+export function tryExtractKeyFromPublicUrl(url: string): string | null {
+  if (!url.includes("res.cloudinary.com")) {
+    return null;
+  }
+  const match = url.match(/\/upload\/(?:[^/]+\/)*(?:v\d+\/)?([^?]+)/);
+  if (!match?.[1]) {
+    return null;
+  }
+  return decodeURIComponent(match[1]);
 }

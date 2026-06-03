@@ -61,7 +61,7 @@ function validateUploadInput(
   return { bucket };
 }
 
-/** Upload via API (avoids browser → MinIO CORS). */
+/** Upload via API (stored in Cloudinary). */
 export async function uploadDirect(
   buffer: Buffer,
   req: SignUploadRequest
@@ -70,13 +70,13 @@ export async function uploadDirect(
   const { bucket } = validateUploadInput(contentType, fileSize, folder);
   const fileKey = generateFileKey(folder, userId, fileName);
 
-  await putObjectBuffer(bucket, fileKey, buffer, contentType);
+  const result = await putObjectBuffer(bucket, fileKey, buffer, contentType);
   logger.info("File uploaded via API proxy", { userId, folder, fileKey, bucket });
 
-  if (bucket === PUBLIC_BUCKET) {
-    return { url: getPublicUrl(fileKey), fileKey, bucket };
-  }
-  const url = await generatePresignedDownloadUrl(bucket, fileKey, 60 * 60 * 24);
+  const url =
+    bucket === PRIVATE_BUCKET
+      ? result.secure_url
+      : result.secure_url || getPublicUrl(fileKey);
   return { url, fileKey, bucket };
 }
 

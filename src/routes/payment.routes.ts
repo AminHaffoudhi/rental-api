@@ -14,5 +14,9 @@ router.post(
   "/checkout/:bookingId",
   asyncHandler(paymentController.createCheckoutSession)
 );
+router.post(
+  "/verify/:bookingId",
+  asyncHandler(paymentController.verifyCheckoutReturn)
+);
 
 export default router;

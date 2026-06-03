@@ -37,6 +37,17 @@ export async function createCheckoutSession(req: Request, res: Response): Promis
   success(res, data);
 }
 
+export async function verifyCheckoutReturn(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const data = await stripePaymentService.verifyStripeCheckoutAfterReturn(
+    pathParam(req.params.bookingId),
+    req.user.id
+  );
+  success(res, data);
+}
+
 export async function stripeWebhook(req: Request, res: Response): Promise<void> {
   const signature = req.headers["stripe-signature"];
   const rawBody = req.body as Buffer;

@@ -120,6 +120,58 @@ export async function createStripeCheckoutSession(
   return { url: session.url, sessionId: session.id };
 }
 
+/** Called when returning from Stripe Checkout (webhook may be delayed or missing in local dev). */
+export async function verifyStripeCheckoutAfterReturn(
+  bookingId: string,
+  userId: string
+): Promise<{ activated: boolean }> {
+  if (!isStripeConfigured()) {
+    throw new BusinessError("Stripe is not configured on the server");
+  }
+
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { payment: true },
+  });
+  if (!booking || !booking.payment) {
+    throw new NotFoundError("Booking");
+  }
+  if (booking.renterId !== userId && booking.ownerId !== userId) {
+    throw new ForbiddenError();
+  }
+
+  if (
+    booking.status === BookingStatus.ACTIVE &&
+    booking.payment.status === PaymentStatus.CONFIRMED
+  ) {
+    return { activated: false };
+  }
+
+  const sessionId = booking.payment.stripeCheckoutSessionId;
+  if (!sessionId) {
+    throw new BusinessError("No Stripe checkout session found for this booking");
+  }
+
+  const stripe = getStripe();
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+  if (session.payment_status !== "paid") {
+    throw new BusinessError("Stripe payment is not complete yet");
+  }
+
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id;
+
+  await confirmBookingPaymentFromStripe(bookingId, {
+    sessionId: session.id,
+    paymentIntentId: paymentIntentId ?? undefined,
+  });
+
+  return { activated: true };
+}
+
 export async function handleStripeWebhook(rawBody: Buffer, signature: string | undefined): Promise<void> {
   if (!STRIPE_WEBHOOK_SECRET) {
     throw new BusinessError("Stripe webhook secret is not configured");

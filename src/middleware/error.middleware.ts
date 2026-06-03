@@ -139,7 +139,7 @@ export function errorMiddleware(
       message:
         process.env.NODE_ENV === "production"
           ? "File storage is temporarily unavailable."
-          : "MinIO credentials are wrong. Set MINIO_ACCESS_KEY and MINIO_SECRET_KEY in rental-api/.env to match your MinIO login (docker: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD).",
+          : "Cloudinary credentials are wrong. Check CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in rental-api/.env.",
       requestId,
     });
     return;
