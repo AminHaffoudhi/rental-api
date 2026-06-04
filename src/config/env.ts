@@ -44,8 +44,8 @@ export const CLOUDINARY_API_SECRET = requireNonEmpty(
   process.env.CLOUDINARY_API_SECRET
 );
 
-/** Optional root folder prefix for all uploads (e.g. rentmarket). */
-export const CLOUDINARY_FOLDER = (process.env.CLOUDINARY_FOLDER?.trim() || "rentmarket").replace(
+/** Optional root folder prefix for all uploads (e.g. ekri). */
+export const CLOUDINARY_FOLDER = (process.env.CLOUDINARY_FOLDER?.trim() || "ekri").replace(
   /\/+$/,
   ""
 );
@@ -65,8 +65,8 @@ export const REDIS_PORT = process.env.REDIS_PORT?.trim() || "6379";
 /** Stripe secret key — unset disables online checkout (manual admin confirm only). */
 export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY?.trim() || "";
 export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET?.trim() || "";
-/** ISO currency for Checkout (Stripe does not support TND; use eur or usd in test). */
-export const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY?.trim() || "eur").toLowerCase();
+/** ISO currency for Stripe Checkout (default TND — 3-decimal; set via STRIPE_CURRENCY). */
+export const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY?.trim() || "tnd").toLowerCase();
 
 export function isStripeConfigured(): boolean {
   return STRIPE_SECRET_KEY.length > 0;

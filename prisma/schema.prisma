@@ -66,6 +66,17 @@ enum DisputeStatus {
   RESOLVED_RENTER
 }
 
+enum SupportReportType {
+  CONTACT
+  REPORT
+}
+
+enum SupportReportStatus {
+  NEW
+  READ
+  ARCHIVED
+}
+
 model User {
   id            String    @id @default(cuid())
   name          String
@@ -293,4 +304,27 @@ model Dispute {
 
   booking  Booking @relation(fields: [bookingId], references: [id])
   raisedBy User    @relation(fields: [raisedById], references: [id])
+}
+
+model SupportReport {
+  id         String              @id @default(cuid())
+  type       SupportReportType   @default(CONTACT)
+  status     SupportReportStatus @default(NEW)
+  firstName  String
+  lastName   String
+  email      String
+  phone      String?
+  subject    String?
+  message    String
+  adminNote  String?
+  readAt     DateTime?
+  readById   String?
+  archivedAt DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+  @@index([email])
 }

@@ -29,7 +29,7 @@ export async function listForUser(userId: string): Promise<UserNotificationDto[]
     notifications.push({
       id: `kyc-approved-${user.id}`,
       type: "kyc_approved",
-      title: "🎉 You're verified! Start listing equipment",
+      title: "You're verified — start listing equipment",
       body: "Your identity has been approved. You can now create listings and start earning.",
       url: `${BASE_URL}/equipment/new`,
       timestamp: user.kycDocument.reviewedAt,
@@ -42,7 +42,7 @@ export async function listForUser(userId: string): Promise<UserNotificationDto[]
     notifications.push({
       id: `kyc-rejected-${user.id}`,
       type: "kyc_rejected",
-      title: "⚠️ Identity verification needs attention",
+      title: "Identity verification needs attention",
       body: `Your document was not accepted: ${reason.slice(0, 100)}. Please re-upload.`,
       url: `${BASE_URL}/profile`,
       timestamp: user.kycDocument.reviewedAt,
@@ -54,7 +54,7 @@ export async function listForUser(userId: string): Promise<UserNotificationDto[]
     notifications.push({
       id: `kyc-pending-${user.id}`,
       type: "kyc_submitted",
-      title: "🪪 Identity document under review",
+      title: "Identity document under review",
       body: "Our team is reviewing your submission. We'll notify you when it's complete.",
       url: `${BASE_URL}/profile`,
       timestamp: user.kycDocument?.submittedAt ?? user.updatedAt,
@@ -202,12 +202,12 @@ export async function listForUser(userId: string): Promise<UserNotificationDto[]
 
     if (b.status === "PENDING" && isOwner) {
       type = "booking_request";
-      notifTitle = "📬 New booking request";
+      notifTitle = "New booking request";
       body = `Someone requested to rent "${title}".`;
       url = `${BASE_URL}/dashboard/bookings`;
     } else if (b.status === "CONFIRMED" && !isOwner) {
       type = "booking_approved";
-      notifTitle = "🎉 Booking approved";
+      notifTitle = "Booking approved";
       body = `Your request for "${title}" was approved. Complete payment to confirm.`;
     } else if (b.status === "REJECTED" && !isOwner) {
       type = "booking_rejected";
@@ -215,7 +215,7 @@ export async function listForUser(userId: string): Promise<UserNotificationDto[]
       body = `Your request for "${title}" was not approved.`;
     } else if (b.status === "PAID" || b.status === "PAYMENT_PENDING") {
       type = "payment_confirmed";
-      notifTitle = "💳 Payment update";
+      notifTitle = "Payment update";
       body = `Payment status updated for "${title}".`;
     }
 

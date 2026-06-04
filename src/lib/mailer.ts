@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { PLATFORM_NAME } from "@/config/brand";
 import logger from "@/lib/logger";
 
 const host = process.env.SMTP_HOST || "smtp.gmail.com";
@@ -36,6 +37,7 @@ export interface MailOptions {
   subject: string;
   html: string;
   text?: string;
+  replyTo?: string;
 }
 
 export async function sendMail(options: MailOptions): Promise<void> {
@@ -57,7 +59,7 @@ export async function sendMail(options: MailOptions): Promise<void> {
 
   try {
     const info = await transporter.sendMail({
-      from: `"RentMarket" <${fromUser}>`,
+      from: `"${PLATFORM_NAME}" <${fromUser}>`,
       ...options,
     });
     logger.info("Email sent", { messageId: info.messageId, to: options.to });

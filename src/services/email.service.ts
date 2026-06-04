@@ -1,4 +1,5 @@
 import type { Booking, Delivery, Equipment, User } from "@prisma/client";
+import { PLATFORM_NAME } from "@/config/brand";
 import { sendMail } from "@/lib/mailer";
 import logger from "@/lib/logger";
 import { formatCurrency } from "@/utils/currency";
@@ -42,12 +43,12 @@ export function baseTemplate(content: string): string {
     <div class="wrapper">
       <div class="card">
         <div class="header">
-          <h1>● RentMarket</h1>
+          <h1>● ${PLATFORM_NAME}</h1>
         </div>
         <div class="body">${content}</div>
         <div class="footer">
-          © 2026 RentMarket · Tunisia<br>
-          This email was sent to you because you have an account on RentMarket.
+          © 2026 ${PLATFORM_NAME} · Tunisia<br>
+          This email was sent to you because you have an account on ${PLATFORM_NAME}.
         </div>
       </div>
     </div>
@@ -79,7 +80,7 @@ export async function sendVerificationCodeEmail(
 ): Promise<void> {
   await sendMail({
     to,
-    subject: `${code} — Your RentMarket verification code`,
+    subject: `${code} — Your ${PLATFORM_NAME} verification code`,
     html: baseTemplate(`
       <p>Hi <strong>${escapeHtml(name)}</strong>,</p>
       <p>Use this code to verify your email address:</p>
@@ -88,10 +89,10 @@ export async function sendVerificationCodeEmail(
         <div class="code-label">Expires in 10 minutes</div>
       </div>
       <div class="warning">
-        Never share this code with anyone. RentMarket will never ask for it.
+        Never share this code with anyone. ${PLATFORM_NAME} will never ask for it.
       </div>
     `),
-    text: `Your RentMarket verification code is: ${code} (expires in 10 minutes)`,
+    text: `Your ${PLATFORM_NAME} verification code is: ${code} (expires in 10 minutes)`,
   });
 }
 
@@ -106,7 +107,7 @@ function escapeHtml(s: string): string {
 export async function sendKycSubmittedEmail(to: string, name: string): Promise<void> {
   await sendMail({
     to,
-    subject: "Identity document received — RentMarket",
+    subject: `Identity document received — ${PLATFORM_NAME}`,
     html: baseTemplate(`
       <p>Hi <strong>${escapeHtml(name)}</strong>,</p>
       <p>We've received your identity document. Our team will review it within <strong>24–48 hours</strong>.</p>
@@ -126,7 +127,7 @@ export async function sendKycApprovedEmail(to: string, name: string): Promise<vo
     html: baseTemplate(`
       <p>Hi <strong>${escapeHtml(name)}</strong>,</p>
       <p>Great news! Your identity has been <strong style="color:#16a34a">verified</strong>.</p>
-      <p>You can now list your equipment on RentMarket and start earning.</p>
+      <p>You can now list your equipment on ${PLATFORM_NAME} and start earning.</p>
       <a href="${base}/equipment/new" class="btn">
         Create Your First Listing →
       </a>

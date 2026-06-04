@@ -5,14 +5,7 @@ import { BusinessError, ForbiddenError, NotFoundError, ValidationError } from "@
 import { prisma } from "@/lib/prisma";
 import { getStripe } from "@/lib/stripe";
 import { activateRentalAfterPayment } from "@/services/booking.service";
-
-function toMinorUnits(amount: number): number {
-  const minor = Math.round(amount * 100);
-  if (minor < 1) {
-    throw new ValidationError("Payment amount is too small");
-  }
-  return minor;
-}
+import { toStripeMinorUnits } from "@/utils/stripeCurrency";
 
 export async function confirmBookingPaymentFromStripe(
   bookingId: string,
@@ -55,9 +48,9 @@ export async function createStripeCheckoutSession(
   }
 
   const stripe = getStripe();
-  const rentalMinor = toMinorUnits(booking.payment.amount);
-  const depositMinor = toMinorUnits(booking.payment.depositAmount);
   const currency = STRIPE_CURRENCY;
+  const rentalMinor = toStripeMinorUnits(booking.payment.amount, currency);
+  const depositMinor = toStripeMinorUnits(booking.payment.depositAmount, currency);
 
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
     {

@@ -24,9 +24,25 @@ export async function notifyKycSubmitted(userId: string, userName: string): Prom
   });
 }
 
+export async function notifySupportReport(
+  reportId: string,
+  reportType: "CONTACT" | "REPORT",
+  senderName: string,
+  subject: string
+): Promise<void> {
+  const isIssue = reportType === "REPORT";
+  const adminUrl = `${ADMIN_URL}/reports/${reportId}`;
+  await sendToAdmins({
+    title: isIssue ? "New issue report" : "New contact message",
+    message: `${senderName}: ${subject.slice(0, 100)}`,
+    url: adminUrl,
+    data: { type: "support_report", reportId, reportType, url: adminUrl },
+  });
+}
+
 export async function notifyKycApproved(userId: string): Promise<void> {
   await sendToUser(userId, {
-    title: "🎉 You're verified! Start listing equipment",
+    title: "You're verified — start listing equipment",
     message: "Your identity has been approved by our team. You can now create listings and start earning.",
     url: `${BASE_URL}/equipment/new`,
     data: { type: "kyc_approved" },
@@ -35,7 +51,7 @@ export async function notifyKycApproved(userId: string): Promise<void> {
 
 export async function notifyKycRejected(userId: string, reason: string): Promise<void> {
   await sendToUser(userId, {
-    title: "⚠️ Identity verification needs attention",
+    title: "Identity verification needs attention",
     message: `Your document was not accepted: ${reason.slice(0, 100)}. Please re-upload.`,
     url: `${BASE_URL}/profile`,
     data: { type: "kyc_rejected", reason },
