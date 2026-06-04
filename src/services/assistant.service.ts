@@ -4,12 +4,49 @@ import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 import * as bookingService from "@/services/booking.service";
 import * as ownerDashboardService from "@/services/ownerDashboard.service";
-import type { AssistantChatInput } from "@/validators/assistant.validator";
+import type { AssistantChatInput, AssistantLanguage } from "@/validators/assistant.validator";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-20250514";
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+const LANGUAGE_NAMES: Record<AssistantLanguage, string> = {
+  en: "English",
+  fr: "French",
+  ar: "Arabic",
+};
+
+const OWNER_SUGGESTION_FALLBACKS: Record<AssistantLanguage, string[]> = {
+  en: [
+    "Summarize my earnings and what changed this month",
+    "Which listings should I improve or reprice?",
+    "Do I have pending booking requests?",
+    "When should I raise or lower my daily rates?",
+  ],
+  fr: [
+    "Résumez mes revenus et l'évolution ce mois-ci",
+    "Quelles annonces dois-je améliorer ou retarifer ?",
+    "Ai-je des demandes de réservation en attente ?",
+    "Quand augmenter ou baisser mes tarifs journaliers ?",
+  ],
+  ar: [
+    "لخّص أرباحي وما تغيّر هذا الشهر",
+    "أي إعلانات يجب تحسينها أو تعديل أسعارها؟",
+    "هل لدي طلبات حجز معلقة؟",
+    "متى أرفع أو أخفض الأسعار اليومية؟",
+  ],
+};
+
+export function parseAssistantLanguage(raw: unknown): AssistantLanguage {
+  if (raw === "fr" || raw === "ar" || raw === "en") return raw;
+  return "en";
+}
+
+function languageRule(language: AssistantLanguage): string {
+  const name = LANGUAGE_NAMES[language];
+  return `Always write in ${name}. All replies and suggestion prompts must be in ${name}, even if the data labels are in English.`;
+}
 
 function equipmentLink(id: string): string {
   return `${CLIENT_URL.replace(/\/+$/, "")}/equipment/${id}`;
@@ -309,7 +346,6 @@ async function buildOwnerContext(ownerId: string): Promise<string> {
 const RENTER_SYSTEM = `You are Ekri's rental assistant for renters in Tunisia. You help users discover quality equipment, trusted owners, and popular categories.
 
 Rules:
-- Answer in the same language the user writes (Arabic, French, or English).
 - Use ONLY the JSON context data for facts about listings, owners, prices, and ratings.
 - When recommending equipment or owners, include markdown links using the exact URLs from context (equipmentUrl, ownerProfileUrl, searchCategoryUrl, profileUrl).
 - Format links like: [Equipment title](equipmentUrl) or [Owner name](profileUrl).
@@ -322,7 +358,6 @@ Rules:
 const OWNER_SYSTEM = `You are Ekri's AI business coach for equipment owners in Tunisia. You help owners grow revenue, manage listings, pricing, and bookings.
 
 Rules:
-- Answer in the same language the user writes (Arabic, French, or English).
 - Use ONLY the JSON context for their stats, listings, earnings, and bookings.
 - Give practical advice on: pricing (daily/weekly rates vs market), listing visibility (isLive), pending approvals, responding to booking requests, earnings trends, month-over-month change, top performers, rejected/pending listings.
 - Include markdown links to dashboard pages from dashboardUrls and listing publicUrl/editUrl when relevant.
@@ -334,8 +369,9 @@ Rules:
 - Do not execute actions—only advise.`;
 
 export async function chatRenter(userId: string, input: AssistantChatInput): Promise<string> {
+  const language = input.language ?? "en";
   const context = await buildRenterContext(userId);
-  const system = `${RENTER_SYSTEM}\n\n--- LIVE MARKETPLACE DATA ---\n${context}`;
+  const system = `${languageRule(language)}\n\n${RENTER_SYSTEM}\n\n--- LIVE MARKETPLACE DATA ---\n${context}`;
   return callClaude(system, input.messages);
 }
 
@@ -347,47 +383,49 @@ export async function chatOwner(
   if (role !== Role.OWNER && role !== Role.BOTH && role !== Role.ADMIN) {
     throw new ForbiddenError("AI owner coach is only available for equipment owners");
   }
+  const language = input.language ?? "en";
   const context = await buildOwnerContext(userId);
-  const system = `${OWNER_SYSTEM}\n\n--- YOUR BUSINESS DATA ---\n${context}`;
+  const system = `${languageRule(language)}\n\n${OWNER_SYSTEM}\n\n--- YOUR BUSINESS DATA ---\n${context}`;
   return callClaude(system, input.messages);
 }
 
 export async function getOwnerSuggestions(
   userId: string,
-  role: Role
+  role: Role,
+  language: AssistantLanguage = "en"
 ): Promise<string[]> {
   if (role !== Role.OWNER && role !== Role.BOTH && role !== Role.ADMIN) {
     throw new ForbiddenError("AI suggestions are only available for equipment owners");
   }
 
   if (!isClaudeConfigured()) {
-    return [
-      "Review your pending booking requests",
-      "Compare your top listing's price to similar equipment",
-      "Turn on visibility for approved listings",
-    ];
+    return OWNER_SUGGESTION_FALLBACKS[language];
   }
 
+  const langName = LANGUAGE_NAMES[language];
   const context = await buildOwnerContext(userId);
   const reply = await callClaude(
-    `${OWNER_SYSTEM}\n\nReturn exactly 4 short suggestion prompts (one line each) the owner could ask you, based on their data. Output ONLY a JSON array of strings, no markdown.`,
+    `${languageRule(language)}\n\n${OWNER_SYSTEM}\n\nReturn exactly 4 short suggestion prompts (one line each) in ${langName} that the owner could ask you, based on their data. Output ONLY a JSON array of strings, no markdown.`,
     [{ role: "user", content: `Data:\n${context}` }]
   );
 
   try {
     const parsed = JSON.parse(reply) as unknown;
     if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
-      return parsed.slice(0, 4);
+      const items = parsed.slice(0, 4);
+      return items.length > 0 ? items : OWNER_SUGGESTION_FALLBACKS[language];
     }
   } catch {
     /* fall through */
   }
 
-  return reply
+  const lines = reply
     .split("\n")
     .map((l) => l.replace(/^[-*\d.]+\s*/, "").trim())
     .filter(Boolean)
     .slice(0, 4);
+
+  return lines.length ? lines : OWNER_SUGGESTION_FALLBACKS[language];
 }
 
 export function assistantStatus(): { enabled: boolean; model: string } {

@@ -17,7 +17,12 @@ export async function ownerChat(req: Request, res: Response): Promise<void> {
 
 export async function ownerSuggestions(req: Request, res: Response): Promise<void> {
   if (!req.user) throw new UnauthorizedError();
-  const suggestions = await assistantService.getOwnerSuggestions(req.user.id, req.user.role);
+  const language = assistantService.parseAssistantLanguage(req.query.lang);
+  const suggestions = await assistantService.getOwnerSuggestions(
+    req.user.id,
+    req.user.role,
+    language
+  );
   success(res, { suggestions });
 }
 
