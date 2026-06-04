@@ -86,7 +86,7 @@ export async function getOwnerDashboard(ownerId: string) {
         isAvailable: true,
         approvalStatus: true,
         categoryId: true,
-        category: { select: { id: true, name: true } },
+        category: { select: { id: true, name: true, slug: true } },
       },
     }),
     prisma.booking.groupBy({
@@ -186,7 +186,10 @@ export async function getOwnerDashboard(ownerId: string) {
     ).length,
   };
 
-  const categoryMap = new Map<string, { categoryId: string; categoryName: string; count: number }>();
+  const categoryMap = new Map<
+    string,
+    { categoryId: string; categorySlug: string; categoryName: string; count: number }
+  >();
   for (const e of equipmentRows) {
     const existing = categoryMap.get(e.categoryId);
     if (existing) {
@@ -194,6 +197,7 @@ export async function getOwnerDashboard(ownerId: string) {
     } else {
       categoryMap.set(e.categoryId, {
         categoryId: e.categoryId,
+        categorySlug: e.category.slug,
         categoryName: e.category.name,
         count: 1,
       });
