@@ -1,4 +1,10 @@
-import { EquipmentApprovalStatus, KycStatus, ReviewStatus } from "@prisma/client";
+import {
+  BookingStatus,
+  EquipmentApprovalStatus,
+  KycStatus,
+  PaymentStatus,
+  ReviewStatus,
+} from "@prisma/client";
 import { CLIENT_URL } from "@/config/env";
 import { prisma } from "@/lib/prisma";
 
@@ -185,47 +191,81 @@ export async function listForUser(userId: string): Promise<UserNotificationDto[]
   const recentBookings = await prisma.booking.findMany({
     where: {
       OR: [{ renterId: userId }, { ownerId: userId }],
-      updatedAt: { gte: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) },
+      updatedAt: { gte: twoWeeksAgo },
     },
     orderBy: { updatedAt: "desc" },
     take: 8,
-    include: { equipment: { select: { title: true } } },
+    include: {
+      equipment: { select: { title: true } },
+      payment: { select: { status: true, confirmedAt: true } },
+    },
   });
+
+  const paidOrActiveStatuses: BookingStatus[] = [
+    BookingStatus.PAID,
+    BookingStatus.ACTIVE,
+    BookingStatus.PICKUP_SCHEDULED,
+    BookingStatus.IN_TRANSIT,
+    BookingStatus.RETURN_SCHEDULED,
+    BookingStatus.RETURNING,
+    BookingStatus.INSPECTING,
+    BookingStatus.COMPLETED,
+  ];
 
   for (const b of recentBookings) {
     const isOwner = b.ownerId === userId;
-    const title = b.equipment.title;
-    let type = "general";
-    let notifTitle = "Booking update";
-    let body = `Your booking for "${title}" was updated.`;
+    const equipmentTitle = b.equipment.title;
+    let type: string | null = null;
+    let notifTitle = "";
+    let body = "";
     let url = `${BASE_URL}/bookings/${b.id}`;
+    const ts = b.payment?.confirmedAt ?? b.updatedAt;
 
-    if (b.status === "PENDING" && isOwner) {
+    if (b.status === BookingStatus.PENDING && isOwner) {
       type = "booking_request";
       notifTitle = "New booking request";
-      body = `Someone requested to rent "${title}".`;
+      body = `Someone requested to rent "${equipmentTitle}".`;
       url = `${BASE_URL}/dashboard/bookings`;
-    } else if (b.status === "CONFIRMED" && !isOwner) {
+    } else if (b.status === BookingStatus.PAYMENT_PENDING && !isOwner) {
       type = "booking_approved";
       notifTitle = "Booking approved";
-      body = `Your request for "${title}" was approved. Complete payment to confirm.`;
-    } else if (b.status === "REJECTED" && !isOwner) {
+      body = `Your request for "${equipmentTitle}" was approved. Complete payment to confirm.`;
+    } else if (b.status === BookingStatus.CONFIRMED && !isOwner) {
+      type = "booking_approved";
+      notifTitle = "Booking approved";
+      body = `Your request for "${equipmentTitle}" was approved. Complete payment to confirm.`;
+    } else if (b.status === BookingStatus.REJECTED && !isOwner) {
       type = "booking_rejected";
       notifTitle = "Booking declined";
-      body = `Your request for "${title}" was not approved.`;
-    } else if (b.status === "PAID" || b.status === "PAYMENT_PENDING") {
-      type = "payment_confirmed";
-      notifTitle = "Payment update";
-      body = `Payment status updated for "${title}".`;
+      body = `Your request for "${equipmentTitle}" was not approved.`;
+    } else if (
+      paidOrActiveStatuses.includes(b.status) &&
+      b.payment?.status === PaymentStatus.CONFIRMED
+    ) {
+      if (isOwner) {
+        type = "payment_received";
+        notifTitle = "Payment received";
+        body = `Payment for "${equipmentTitle}" has been confirmed.`;
+        url = `${BASE_URL}/dashboard/bookings`;
+      } else {
+        type = "payment_confirmed";
+        notifTitle = "Payment confirmed";
+        body = `Payment for "${equipmentTitle}" confirmed. Delivery will be scheduled soon.`;
+        url = `${BASE_URL}/bookings/${b.id}`;
+      }
+    }
+
+    if (!type) {
+      continue;
     }
 
     notifications.push({
-      id: `booking-${b.id}-${b.status}`,
+      id: `booking-${b.id}-${type}-${isOwner ? "owner" : "renter"}`,
       type,
       title: notifTitle,
       body,
       url,
-      timestamp: b.updatedAt,
+      timestamp: ts,
       read: false,
     });
   }

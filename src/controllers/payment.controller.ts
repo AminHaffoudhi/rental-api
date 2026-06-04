@@ -2,7 +2,12 @@ import type { Request, Response } from "express";
 import { UnauthorizedError } from "@/lib/errors";
 import * as paymentService from "@/services/payment.service";
 import * as stripePaymentService from "@/services/stripePayment.service";
-import { STRIPE_CURRENCY, isStripeConfigured } from "@/config/env";
+import {
+  STRIPE_CURRENCY,
+  STRIPE_TND_PER_CHECKOUT_UNIT,
+  isStripeConfigured,
+} from "@/config/env";
+import { PLATFORM_CURRENCY } from "@/utils/stripeAmount";
 import { success } from "@/utils/apiResponse";
 import { pathParam } from "@/utils/pathParam";
 
@@ -23,6 +28,8 @@ export async function getStripeConfig(_req: Request, res: Response): Promise<voi
     enabled: isStripeConfigured(),
     publishableKey: isStripeConfigured() && publishableKey ? publishableKey : null,
     currency: STRIPE_CURRENCY,
+    displayCurrency: PLATFORM_CURRENCY,
+    tndPerCheckoutUnit: STRIPE_TND_PER_CHECKOUT_UNIT,
   });
 }
 

@@ -5,6 +5,12 @@ import { BusinessError, ForbiddenError, NotFoundError, ValidationError } from "@
 import { prisma } from "@/lib/prisma";
 import { getStripe } from "@/lib/stripe";
 import { activateRentalAfterPayment } from "@/services/booking.service";
+import { formatCurrency } from "@/utils/currency";
+import {
+  stripeCheckoutSubmitMessage,
+  stripeLineItemDescription,
+  tndToStripeChargeAmount,
+} from "@/utils/stripeAmount";
 import { toStripeMinorUnits } from "@/utils/stripeCurrency";
 
 export async function confirmBookingPaymentFromStripe(
@@ -49,8 +55,18 @@ export async function createStripeCheckoutSession(
 
   const stripe = getStripe();
   const currency = STRIPE_CURRENCY;
-  const rentalMinor = toStripeMinorUnits(booking.payment.amount, currency);
-  const depositMinor = toStripeMinorUnits(booking.payment.depositAmount, currency);
+  const rentalMinor = toStripeMinorUnits(
+    tndToStripeChargeAmount(booking.payment.amount),
+    currency
+  );
+  const depositMinor = toStripeMinorUnits(
+    tndToStripeChargeAmount(booking.payment.depositAmount),
+    currency
+  );
+
+  const rentalTnd = booking.payment.amount;
+  const depositTnd = booking.payment.depositAmount;
+  const totalTnd = rentalTnd + depositTnd;
 
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
     {
@@ -60,7 +76,10 @@ export async function createStripeCheckoutSession(
         unit_amount: rentalMinor,
         product_data: {
           name: `Rental — ${booking.equipment.title}`,
-          description: `Booking ${booking.id.slice(0, 8)}… (rent + fees)`,
+          description: stripeLineItemDescription(
+            rentalTnd,
+            `Booking ${booking.id.slice(0, 8)}… · rent + fees`
+          ),
         },
       },
     },
@@ -74,7 +93,10 @@ export async function createStripeCheckoutSession(
         unit_amount: depositMinor,
         product_data: {
           name: `Security deposit — ${booking.equipment.title}`,
-          description: "Refundable after return inspection",
+          description: stripeLineItemDescription(
+            depositTnd,
+            "Refundable after return inspection"
+          ),
         },
       },
     });
@@ -89,14 +111,22 @@ export async function createStripeCheckoutSession(
     line_items: lineItems,
     success_url: successUrl,
     cancel_url: cancelUrl,
+    custom_text: {
+      submit: {
+        message: stripeCheckoutSubmitMessage(totalTnd),
+      },
+    },
     metadata: {
       bookingId: booking.id,
       renterId: booking.renterId,
+      totalTnd: String(totalTnd),
     },
     payment_intent_data: {
+      description: `Ekri booking ${booking.id.slice(0, 8)} — ${formatCurrency(totalTnd)}`,
       metadata: {
         bookingId: booking.id,
         renterId: booking.renterId,
+        totalTnd: String(totalTnd),
       },
     },
   });

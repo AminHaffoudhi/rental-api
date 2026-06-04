@@ -467,6 +467,14 @@ export async function completeRental(bookingId: string, userId: string): Promise
     throw new BusinessError("This rental cannot be completed yet");
   }
 
+  const rentalStart = new Date(booking.startDate);
+  rentalStart.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (today < rentalStart) {
+    throw new BusinessError("This rental cannot be completed before the rental start date");
+  }
+
   return prisma.$transaction(async (tx) => {
     if (booking.delivery) {
       await tx.delivery.update({

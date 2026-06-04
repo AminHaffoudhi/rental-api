@@ -65,8 +65,18 @@ export const REDIS_PORT = process.env.REDIS_PORT?.trim() || "6379";
 /** Stripe secret key — unset disables online checkout (manual admin confirm only). */
 export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY?.trim() || "";
 export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET?.trim() || "";
-/** ISO currency for Stripe Checkout (default TND — 3-decimal; set via STRIPE_CURRENCY). */
-export const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY?.trim() || "tnd").toLowerCase();
+/**
+ * ISO currency for Stripe Checkout. Default EUR — most Stripe accounts do not support TND.
+ * Platform prices stay in TND; amounts are converted using STRIPE_TND_PER_CHECKOUT_UNIT.
+ */
+export const STRIPE_CURRENCY = (process.env.STRIPE_CURRENCY?.trim() || "eur").toLowerCase();
+
+/** How many Tunisian dinars equal one unit of STRIPE_CURRENCY (e.g. 3.35 → 215 TND ≈ 64.18 EUR). */
+export const STRIPE_TND_PER_CHECKOUT_UNIT = (() => {
+  const raw = process.env.STRIPE_TND_PER_CHECKOUT_UNIT?.trim();
+  const n = raw ? Number.parseFloat(raw) : 3.35;
+  return Number.isFinite(n) && n > 0 ? n : 3.35;
+})();
 
 export function isStripeConfigured(): boolean {
   return STRIPE_SECRET_KEY.length > 0;

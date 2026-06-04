@@ -98,23 +98,34 @@ export async function notifyBookingRejected(
   });
 }
 
+/** Renter: payment succeeded. Owner: payout-related payment received (separate copy & type). */
 export async function notifyPaymentConfirmed(
   renterId: string,
   ownerId: string,
   equipmentTitle: string,
   bookingId: string
 ): Promise<void> {
+  if (renterId === ownerId) {
+    await sendToUser(renterId, {
+      title: "Payment confirmed",
+      message: `Payment for "${equipmentTitle}" confirmed. Delivery will be scheduled soon.`,
+      url: `${BASE_URL}/bookings/${bookingId}`,
+      data: { type: "payment_confirmed", bookingId, role: "renter" },
+    });
+    return;
+  }
+
   await sendToUser(renterId, {
     title: "Payment confirmed",
     message: `Payment for "${equipmentTitle}" confirmed. Delivery will be scheduled soon.`,
     url: `${BASE_URL}/bookings/${bookingId}`,
-    data: { type: "payment_confirmed", bookingId },
+    data: { type: "payment_confirmed", bookingId, role: "renter" },
   });
   await sendToUser(ownerId, {
     title: "Payment received",
     message: `Payment for "${equipmentTitle}" has been confirmed.`,
     url: `${BASE_URL}/dashboard/bookings`,
-    data: { type: "payment_received", bookingId },
+    data: { type: "payment_received", bookingId, role: "owner" },
   });
 }
 
