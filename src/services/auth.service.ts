@@ -1,7 +1,9 @@
 import bcrypt from "bcryptjs";
 import { CodeType, type Role, type User } from "@prisma/client";
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
+import { assertUserNotBlocked } from "@/lib/accountGuard";
 import { ConflictError, NotFoundError, BusinessError } from "@/lib/errors";
+import { normalizePhone } from "@/lib/phone";
 import logger from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { sendVerificationCodeEmail } from "@/services/email.service";
@@ -23,13 +25,41 @@ export type RegisterResult = {
   message: string;
 };
 
+function registerConflictMessage(err: PrismaClientKnownRequestError): string {
+  const target = Array.isArray(err.meta?.target) ? (err.meta.target as string[]) : [];
+  if (target.includes("phone")) {
+    return "An account with this phone number already exists";
+  }
+  if (target.includes("email")) {
+    return "An account with this email already exists";
+  }
+  return "An account with this email or phone number already exists";
+}
+
 export async function register(data: {
   name: string;
   email: string;
   password: string;
-  phone?: string;
+  phone: string;
   role?: Role;
 }): Promise<RegisterResult> {
+  const email = data.email.trim().toLowerCase();
+  const phone = normalizePhone(data.phone);
+  if (!phone) {
+    throw new ConflictError("Phone number is required");
+  }
+
+  const [existingEmail, existingPhone] = await Promise.all([
+    prisma.user.findUnique({ where: { email }, select: { id: true } }),
+    prisma.user.findFirst({ where: { phone }, select: { id: true } }),
+  ]);
+  if (existingEmail) {
+    throw new ConflictError("An account with this email already exists");
+  }
+  if (existingPhone) {
+    throw new ConflictError("An account with this phone number already exists");
+  }
+
   const hashed = await bcrypt.hash(data.password, 12);
 
   let user: User;
@@ -37,10 +67,10 @@ export async function register(data: {
   try {
     user = await prisma.user.create({
       data: {
-        name: data.name,
-        email: data.email.toLowerCase(),
+        name: data.name.trim(),
+        email,
         password: hashed,
-        phone: data.phone,
+        phone,
         emailVerified: false,
         canList: effectiveRole === "RENTER",
         ...(data.role ? { role: data.role } : {}),
@@ -48,7 +78,7 @@ export async function register(data: {
     });
   } catch (e) {
     if (e instanceof PrismaClientKnownRequestError && e.code === "P2002") {
-      throw new ConflictError("An account with this email already exists");
+      throw new ConflictError(registerConflictMessage(e));
     }
     throw e;
   }
@@ -173,6 +203,7 @@ export async function login(
   if (!ok) {
     throw new HttpError(401, "Invalid credentials");
   }
+  assertUserNotBlocked(user);
   const jwt = signToken({
     id: user.id,
     role: user.role,
@@ -190,5 +221,6 @@ export async function getMe(userId: string): Promise<SafeUser & { kycDocument: u
   if (!user) {
     throw new NotFoundError("User");
   }
+  assertUserNotBlocked(user);
   return toSafeUser(user) as SafeUser & { kycDocument: unknown };
 }

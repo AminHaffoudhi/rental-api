@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { assertUserNotBlocked } from "@/lib/accountGuard";
 import { prisma } from "@/lib/prisma";
 import { UnauthorizedError } from "@/lib/errors";
 import { verifyToken } from "@/utils/jwt";
@@ -25,6 +26,12 @@ export async function authMiddleware(
     const user = await prisma.user.findUnique({ where: { id: payload.id } });
     if (!user) {
       next(new UnauthorizedError());
+      return;
+    }
+    try {
+      assertUserNotBlocked(user);
+    } catch (err) {
+      next(err);
       return;
     }
     req.user = {

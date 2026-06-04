@@ -1,5 +1,7 @@
 import { ReviewStatus, ReviewType, type User } from "@prisma/client";
-import { NotFoundError } from "@/lib/errors";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
+import { ConflictError, NotFoundError } from "@/lib/errors";
+import { normalizePhone } from "@/lib/phone";
 import { prisma } from "@/lib/prisma";
 import { deleteFile, PUBLIC_BUCKET, tryExtractKeyFromPublicUrl } from "@/lib/storage";
 import { categoryPublicSelect } from "@/services/category.service";
@@ -156,16 +158,40 @@ export async function updateUser(
     await deleteStoredUrlIfOwned(id, existing.coverImage, "covers");
   }
 
-  const user = await prisma.user.update({
-    where: { id },
-    data: {
-      ...(data.name !== undefined ? { name: data.name } : {}),
-      ...(data.phone !== undefined ? { phone: data.phone } : {}),
-      ...(data.image !== undefined ? { image: data.image || null } : {}),
-      ...(data.coverImage !== undefined ? { coverImage: data.coverImage || null } : {}),
-      ...(data.bio !== undefined ? { bio: data.bio.trim() } : {}),
-      ...(data.location !== undefined ? { location: data.location.trim() || null } : {}),
-    },
-  });
-  return toSafeUser(user);
+  let phoneUpdate: string | null | undefined;
+  if (data.phone !== undefined) {
+    phoneUpdate = normalizePhone(data.phone);
+    if (phoneUpdate) {
+      const taken = await prisma.user.findFirst({
+        where: { phone: phoneUpdate, NOT: { id } },
+        select: { id: true },
+      });
+      if (taken) {
+        throw new ConflictError("This phone number is already used by another account");
+      }
+    }
+  }
+
+  try {
+    const user = await prisma.user.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.phone !== undefined ? { phone: phoneUpdate } : {}),
+        ...(data.image !== undefined ? { image: data.image || null } : {}),
+        ...(data.coverImage !== undefined ? { coverImage: data.coverImage || null } : {}),
+        ...(data.bio !== undefined ? { bio: data.bio.trim() } : {}),
+        ...(data.location !== undefined ? { location: data.location.trim() || null } : {}),
+      },
+    });
+    return toSafeUser(user);
+  } catch (e) {
+    if (e instanceof PrismaClientKnownRequestError && e.code === "P2002") {
+      const target = Array.isArray(e.meta?.target) ? (e.meta.target as string[]) : [];
+      if (target.includes("phone")) {
+        throw new ConflictError("This phone number is already used by another account");
+      }
+    }
+    throw e;
+  }
 }

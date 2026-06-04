@@ -88,11 +88,13 @@ model User {
   location      String?
   role          Role      @default(RENTER)
   kycStatus     KycStatus @default(PENDING)
-  phone         String?
+  phone         String?   @unique
   emailVerified Boolean   @default(false)
   canList       Boolean   @default(false)
   /// OneSignal subscription / player id for web push targeting (optional).
   oneSignalPlayerId String?
+  blockedAt     DateTime?
+  blockedReason String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
