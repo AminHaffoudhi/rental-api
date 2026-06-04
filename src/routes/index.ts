@@ -1,4 +1,5 @@
 import { Router } from "express";
+import assistantRoutes from "@/routes/assistant.routes";
 import authRoutes from "@/routes/auth.routes";
 import bookingRoutes from "@/routes/booking.routes";
 import categoryRoutes from "@/routes/category.routes";
@@ -15,6 +16,7 @@ import userRoutes from "@/routes/user.routes";
 
 const router = Router();
 
+router.use("/assistant", assistantRoutes);
 router.use("/auth", authRoutes);
 router.use("/categories", categoryRoutes);
 router.use("/contact", contactRoutes);
