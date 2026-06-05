@@ -1,13 +1,16 @@
+import dns from "node:dns";
 import nodemailer from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { PLATFORM_NAME } from "@/config/brand";
 import logger from "@/lib/logger";
 
 const host = process.env.SMTP_HOST || "smtp.gmail.com";
 const port = Number(process.env.SMTP_PORT) || 587;
 const user = process.env.SMTP_USER?.trim();
-const pass = process.env.SMTP_PASS?.trim();
+/** Gmail app passwords are often copied with spaces — strip them. */
+const pass = process.env.SMTP_PASS?.trim().replace(/\s+/g, "");
 
-const transporter = nodemailer.createTransport({
+const smtpOptions = {
   host,
   port,
   secure: process.env.SMTP_SECURE === "true",
@@ -18,10 +21,19 @@ const transporter = nodemailer.createTransport({
           pass,
         }
       : undefined,
+  // Render/cloud hosts often cannot reach Gmail over IPv6 (ENETUNREACH).
+  lookup: (hostname: string, _opts: unknown, callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
+    dns.lookup(hostname, { family: 4 }, callback);
+  },
+  connectionTimeout: 15_000,
+  greetingTimeout: 15_000,
+  socketTimeout: 20_000,
   tls: {
     rejectUnauthorized: false,
   },
-});
+} as SMTPTransport.Options;
+
+const transporter = nodemailer.createTransport(smtpOptions);
 
 void transporter.verify().then(() => {
   logger.info("Gmail SMTP connected", { user: process.env.SMTP_USER });
