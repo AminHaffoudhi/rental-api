@@ -5,7 +5,6 @@ import { initStorage } from "@/lib/storage";
 import logger from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { startScheduler } from "@/jobs/scheduler";
-import { seedAdmin } from "@/seed/adminSeed";
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({
@@ -23,10 +22,7 @@ const server = app.listen(PORT, () => {
     env: process.env.NODE_ENV,
     pid: process.pid,
   });
-  void (async () => {
-    await initStorage();
-    await seedAdmin();
-  })();
+  void initStorage();
 });
 
 async function shutdown(signal: string): Promise<void> {

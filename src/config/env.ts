@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 
-dotenv.config({ override: true });
+// Do not override — platform env vars (e.g. Render DATABASE_URL) must win over a local .env file.
+dotenv.config();
 
 function requireNonEmpty(name: string, value: string | undefined): string {
   if (value === undefined || value.trim() === "") {
