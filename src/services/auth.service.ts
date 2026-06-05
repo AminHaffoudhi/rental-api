@@ -71,7 +71,8 @@ export async function register(data: {
         email,
         password: hashed,
         phone,
-        emailVerified: false,
+        // Email OTP disabled temporarily — renters go straight in; owners still need admin KYC approval.
+        emailVerified: true,
         canList: effectiveRole === "RENTER",
         ...(data.role ? { role: data.role } : {}),
       },
@@ -85,8 +86,6 @@ export async function register(data: {
 
   void notifyNewUserRegistered(user.id, user.name, user.email).catch(() => {});
 
-  const code = await createVerificationCode(user.id, CodeType.EMAIL_VERIFICATION);
-
   const jwt = signToken({
     id: user.id,
     role: user.role,
@@ -94,19 +93,20 @@ export async function register(data: {
     canList: user.canList,
   });
 
-  void sendVerificationCodeEmail(user.email, user.name, code).catch((err) => {
-    logger.warn("Verification email failed — user created but email may not have been sent", {
-      userId: user.id,
-      email: user.email,
-      error: err instanceof Error ? err.message : String(err),
-      hint: "Check SMTP_USER and SMTP_PASS in .env (Gmail App Password).",
-    });
-  });
+  // Email OTP disabled temporarily (Render email delivery).
+  // const code = await createVerificationCode(user.id, CodeType.EMAIL_VERIFICATION);
+  // void sendVerificationCodeEmail(user.email, user.name, code).catch((err) => {
+  //   logger.warn("Verification email failed — user created but email may not have been sent", {
+  //     userId: user.id,
+  //     email: user.email,
+  //     error: err instanceof Error ? err.message : String(err),
+  //   });
+  // });
 
   return {
-    user: toSafeUser(user),
+    user: toSafeUser({ ...user, emailVerified: true }),
     token: jwt,
-    message: "Check your email for a 6-digit verification code.",
+    message: "Account created successfully.",
   };
 }
 
@@ -192,13 +192,14 @@ export async function login(
   if (!user?.password) {
     throw new HttpError(401, "Invalid credentials");
   }
-  if (!user.emailVerified) {
-    throw new HttpError(
-      403,
-      "Please verify your email before signing in. Check your inbox or request a new code.",
-      "EMAIL_NOT_VERIFIED"
-    );
-  }
+  // Email OTP disabled temporarily — allow login without inbox verification.
+  // if (!user.emailVerified) {
+  //   throw new HttpError(
+  //     403,
+  //     "Please verify your email before signing in. Check your inbox or request a new code.",
+  //     "EMAIL_NOT_VERIFIED"
+  //   );
+  // }
   const ok = await bcrypt.compare(password, user.password);
   if (!ok) {
     throw new HttpError(401, "Invalid credentials");
